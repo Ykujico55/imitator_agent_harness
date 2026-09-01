@@ -1,0 +1,23 @@
+{
+  "name": "imitator-agent-harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Evidence-first GitHub precedent discovery for coding agents.",
+  "bin": {
+    "imitator": "./src/cli.ts"
+  },
+  "scripts": {
+    "prepare": "node src/cli.ts prepare",
+    "test": "node --test test/*.test.ts",
+    "check": "npm test && tsc --noEmit && node src/cli.ts help"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^26.4.0",
+    "typescript": "^7.0.2"
+  }
+}
