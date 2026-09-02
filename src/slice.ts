@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import type { EvidenceSlice, HarnessConfig, RepositoryAssessment, TaskSpec, TreeEntry } from "./types.ts";
 import type { GitHubClient } from "./github.ts";
 import { taskTerms } from "./query.ts";
 
-const EXCLUDED = /(^|\/)(node_modules|vendor|dist|build|coverage|fixtures?|snapshots?|generated|\.vscode|\.idea)(\/|$)|\.(lock|min\.(js|css)|map|png|jpe?g|gif|pdf|zip|wasm)$|\.i18n\.ya?ml$/i;
+const EXCLUDED = /(^|\/)(node_modules|vendor|dist|build|coverage|fixtures?|snapshots?|generated|\.vscode|\.idea|\.agents)(\/|$)|(^|\/)(AGENTS|CLAUDE)\.md$|^\.github\/(copilot-instructions|instructions)(\/|\.|$)|\.(lock|min\.(js|css)|map|png|jpe?g|gif|pdf|zip|wasm)$|\.i18n\.ya?ml$/i;
 const TEXT_FILE = /(^|\/)(README|ARCHITECTURE|DESIGN|CONTRIBUTING|SECURITY)(\.[^/]*)?$|\.(md|mdx|ts|tsx|js|jsx|py|rs|go|java|kt|rb|toml|ya?ml|json)$/i;
+const DESIGN_PATH = /(^|\/)(architecture|design|adr)(\/|\.|$)|(^|\/)(rfcs?)(\/|$)|(^|\/)(RFC-\d+|ADR-\d+)[^/]*\.md$/i;
 
 export function rankPaths(tree: TreeEntry[], terms: string[]): Array<{ entry: TreeEntry; score: number; reason: string }> {
   return tree
@@ -14,7 +16,7 @@ export function rankPaths(tree: TreeEntry[], terms: string[]): Array<{ entry: Tr
       let score = matches.length * 20;
       const reasons: string[] = [];
       if (matches.length) reasons.push(`path matches ${matches.join(", ")}`);
-      if (/(^|\/)(architecture|design|adr|rfcs?)(\/|\.|$)/i.test(path)) { score += 35; reasons.push("design documentation"); }
+      if (DESIGN_PATH.test(path)) { score += 35; reasons.push("design documentation"); }
       if (/^readme/i.test(path)) { score += 28; reasons.push("project overview"); }
       if (/(^|\/)(examples?|samples?)(\/|$)/i.test(path)) { score += 18; reasons.push("usage example"); }
       if (/(^|\/)(test|tests|spec|__tests__)(\/|$)/i.test(path)) { score += 12; reasons.push("behavioral evidence"); }
@@ -22,11 +24,12 @@ export function rankPaths(tree: TreeEntry[], terms: string[]): Array<{ entry: Tr
       score -= path.split("/").length * 0.5;
       return { entry, score, reason: reasons.join("; ") || "representative source" };
     })
+    .filter((candidate) => candidate.score >= 5)
     .sort((a, b) => b.score - a.score || a.entry.path.localeCompare(b.entry.path));
 }
 
 function evidenceBucket(path: string): string {
-  if (/architecture|design|adr|rfc/i.test(path)) return "design";
+  if (DESIGN_PATH.test(path)) return "design";
   if (/(^|\/)(test|tests|spec|__tests__)(\/|$)/i.test(path)) return "test";
   if (/(^|\/)(examples?|samples?)(\/|$)/i.test(path)) return "example";
   if (/^readme/i.test(path)) return "readme";
@@ -45,7 +48,14 @@ function diversifyPaths(
   ranked: ReturnType<typeof rankPaths>,
   limit: number,
 ): ReturnType<typeof rankPaths> {
-  const caps: Record<string, number> = { design: 2, test: 2, example: 1, readme: 1, source: 2, other: 1 };
+  const caps: Record<string, number> = {
+    design: Math.max(2, Math.ceil(limit * 0.2)),
+    test: Math.max(2, Math.ceil(limit * 0.25)),
+    example: Math.max(1, Math.ceil(limit * 0.15)),
+    readme: 1,
+    source: Math.max(2, Math.ceil(limit * 0.45)),
+    other: Math.max(1, Math.ceil(limit * 0.1)),
+  };
   const counts: Record<string, number> = {};
   const families = new Set<string>();
   const selected: ReturnType<typeof rankPaths> = [];
@@ -94,7 +104,12 @@ export async function collectSlices(client: GitHubClient, assessments: Repositor
         if (remaining < 200) return slices;
         const content = window.content.slice(0, remaining);
         characters += content.length;
+        const id = createHash("sha256")
+          .update(`${repo.fullName}\0${repo.resolvedRevision}\0${candidate.entry.path}\0${window.start}\0${window.end}`)
+          .digest("hex")
+          .slice(0, 16);
         slices.push({
+          id,
           repository: repo.fullName,
           repositoryUrl: repo.htmlUrl,
           license: repo.license,

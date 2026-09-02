@@ -55,6 +55,7 @@ export type RepositoryAssessment = {
 };
 
 export type EvidenceSlice = {
+  id: string;
   repository: string;
   repositoryUrl: string;
   license: string | null;
@@ -87,14 +88,69 @@ export type HarnessConfig = {
     maxSlices: number;
     maxTotalCharacters: number;
   };
+  review: {
+    minimumConfidence: number;
+    minimumEvidenceSlices: number;
+    maximumRisk: "low" | "medium" | "high";
+  };
 };
 
 export type ReferencePack = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   generatedAt: string;
   task: TaskSpec;
   queries: string[];
   assessments: RepositoryAssessment[];
   slices: EvidenceSlice[];
   practices: string[];
+};
+
+export type ReviewVerdict = "adopt" | "adapt" | "reject" | "pending";
+export type ReviewRisk = "low" | "medium" | "high";
+
+export type RepositoryReviewDecision = {
+  repository: string;
+  verdict: ReviewVerdict;
+  confidence: number;
+  riskLevel: ReviewRisk;
+  summary: string;
+  transferablePatterns: string[];
+  mismatches: string[];
+  risks: string[];
+  evidenceSliceIds: string[];
+};
+
+export type ReviewRequest = {
+  schemaVersion: 1;
+  referencePackFingerprint: string;
+  task: TaskSpec;
+  instructions: string[];
+  candidates: Array<{
+    repository: string;
+    repositoryUrl: string;
+    license: string | null;
+    phaseOneOverall: number;
+    dimensions: RepositoryAssessment["dimensions"];
+    slices: Array<Pick<EvidenceSlice, "id" | "path" | "startLine" | "endLine" | "sourceUrl" | "reason" | "content">>;
+  }>;
+};
+
+export type ReviewSubmission = {
+  schemaVersion: 1;
+  referencePackFingerprint: string;
+  reviewer: string;
+  decisions: RepositoryReviewDecision[];
+};
+
+export type GateResult = {
+  schemaVersion: 1;
+  referencePackFingerprint: string;
+  generatedAt: string;
+  results: Array<{
+    repository: string;
+    approved: boolean;
+    reasons: string[];
+    decision?: RepositoryReviewDecision;
+  }>;
+  approvedPack: ReferencePack;
 };

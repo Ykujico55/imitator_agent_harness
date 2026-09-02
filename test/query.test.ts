@@ -12,6 +12,13 @@ test("derives bilingual domain terms and bounded GitHub queries", () => {
   const queries = planQueries(task, defaultConfig);
   assert.ok(queries.length > 0 && queries.length <= 5);
   assert.ok(queries.every((query) => query.includes("stars:>=100") && query.includes("language:TypeScript")));
+  assert.ok(queries.every((query) => /coding-agent|agent-harness|code-search|repository-search|software-patterns/.test(query)));
+});
+
+test("does not emit broad supporting-term queries when domain anchors exist", () => {
+  const queries = planQueries({ task: "TypeScript coding agent lifecycle hooks" }, defaultConfig);
+  assert.ok(queries.every((query) => query.includes("coding-agent") || query.includes("agent-harness")));
+  assert.ok(!queries.some((query) => query.startsWith("typescript hooks ")));
 });
 
 test("keeps explicit queries but still applies safety qualifiers", () => {

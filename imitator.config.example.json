@@ -11,10 +11,15 @@
     "allowedLicenses": ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC"]
   },
   "slicing": {
-    "maxRepositories": 3,
-    "maxFilesPerRepository": 6,
+    "maxRepositories": 4,
+    "maxFilesPerRepository": 12,
     "maxLinesPerSlice": 60,
-    "maxSlices": 18,
-    "maxTotalCharacters": 50000
+    "maxSlices": 48,
+    "maxTotalCharacters": 120000
+  },
+  "review": {
+    "minimumConfidence": 0.7,
+    "minimumEvidenceSlices": 1,
+    "maximumRisk": "medium"
   }
 }

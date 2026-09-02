@@ -34,10 +34,18 @@ export function taskTerms(spec: TaskSpec): string[] {
 export function planQueries(spec: TaskSpec, config: HarnessConfig): string[] {
   const explicit = spec.queries?.map((query) => query.trim()).filter(Boolean) ?? [];
   const terms = taskTerms(spec);
+  const anchors = terms.filter((term) => term.includes("-") || term.includes("+"));
+  const supporting = terms.filter((term) => !anchors.includes(term));
   const generated: string[] = [];
-  if (terms.length) generated.push(terms.slice(0, 4).join(" "));
-  for (let i = 0; i < Math.min(terms.length, 4); i += 2) {
-    generated.push(terms.slice(i, i + 2).join(" "));
+  if (anchors.length) {
+    generated.push([...anchors.slice(0, 2), ...supporting.slice(0, 2)].join(" "));
+    generated.push(anchors.slice(0, 3).join(" "));
+    for (const anchor of anchors.slice(0, 2)) {
+      if (supporting[0]) generated.push(`${anchor} ${supporting[0]}`);
+    }
+  } else {
+    if (terms.length) generated.push(terms.slice(0, 4).join(" "));
+    for (let i = 0; i < Math.min(terms.length, 4); i += 2) generated.push(terms.slice(i, i + 2).join(" "));
   }
   const qualifiers = [`stars:>=${config.github.minimumStars}`, "archived:false", "fork:false"];
   if (spec.language) qualifiers.push(`language:${spec.language}`);

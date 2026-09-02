@@ -6,7 +6,7 @@
 
 ```text
 任务 → 多查询召回 → 仅读取仓库画像 → 六维评分/许可证门禁
-     → 路径与窗口级切片 → 参考文档 + agent 约束 → 本地 coding agent
+     → 路径与窗口级切片 → 结构化二阶段评审 → 准入 gate → 本地 coding agent
 ```
 
 ## 已实现的 MVP
@@ -15,8 +15,12 @@
 - 领域匹配、工程成熟度、可迁移性、范式清晰度、设计合理性、风险六维可解释评分。
 - 默认宽松许可证 allowlist；无许可证仓库不会进入参考上下文。
 - 路径排序与固定行数窗口切片，总文件数、切片数和字符数均受预算限制。
+- 默认证据池支持 4 个仓库、每仓库 12 个文件、总计 48 个切片和 12 万字符；类别配额会随项目规模动态扩展。
 - 每个切片保留仓库、许可证、分支、文件、行号和 GitHub 链接。
-- 输出 `manifest.json`、人读的 `REFERENCE.md` 和 agent 用的 `AGENT_CONTEXT.md`。
+- 每个切片固定到 commit SHA，并拥有稳定证据 ID。
+- 输出 `manifest.json`、`REFERENCE.md`、`AGENT_CONTEXT.md`、`REVIEW_REQUEST.json` 和 fail-closed 的 `REVIEW_TEMPLATE.json`。
+- 人或任意模型可填写结构化评审；gate 校验 pack 指纹、证据归属、置信度、风险、范式、错配和风险说明。
+- gate 只输出明确批准且被引用的切片，未评审推断不会进入最终 agent 上下文。
 - 不 clone、不安装、不构建、不执行上游内容；远程文本永远按不可信数据处理。
 - 零运行时依赖，Node.js 22.18+ 可直接运行 TypeScript；TypeScript 仅作为开发期严格检查工具。
 
@@ -32,7 +36,15 @@ node src/cli.ts prepare `
   --language TypeScript
 ```
 
-输出位于 `.imitator/reference/<timestamp>/`。将其中的 `AGENT_CONTEXT.md` 和按需选中的 `REFERENCE.md` 片段交给 Pi、Codex 或其他 agent 即可。不要默认注入全部切片。
+输出位于 `.imitator/reference/<timestamp>/`。先检查 `REVIEW_REQUEST.json`，复制并填写 `REVIEW_TEMPLATE.json`，再执行：
+
+```powershell
+node src/cli.ts gate `
+  --manifest ".imitator/reference/<timestamp>/manifest.json" `
+  --decisions ".imitator/reference/<timestamp>/REVIEW_TEMPLATE.json"
+```
+
+最终只把 `approved/APPROVED_AGENT_CONTEXT.md` 和按需选中的 `approved/APPROVED_REFERENCE.md` 片段交给 Pi、Codex 或其他 agent。
 
 可复制示例配置：
 
@@ -55,6 +67,6 @@ Star 只占成熟度的一部分。通过门禁还需要领域信号、测试/CI
 
 Pi 的 extension/SDK 形态很适合接入，但“参考发现”本身应该是可测试、无模型绑定的核心。首版先生成通用 reference pack；下一层适配器只负责在 coding 生命周期的 `before task` 阶段调用本工具，并把预算内上下文注入会话。这样更容易同时支持 Pi、Codex、Claude Code 和 CI。
 
-## 仍需演进
+## 当前边界与后续演进
 
-见 [架构与路线图](docs/architecture.md)。最重要的下一步是 GitHub App 权限模型、基于 commit SHA 的可复现固定、LLM judge 的结构化二阶段复核、语义切片/去重、项目本地规范匹配，以及真实任务 A/B eval。
+见 [架构与路线图](docs/architecture.md)。当前已经实现 provider-neutral 的结构化二阶段协议，但不内置任何模型调用；评审质量仍取决于人或外部 judge。后续重点是 GitHub App 权限模型、语义切片/去重、项目本地规范匹配、Pi 薄适配器，以及真实任务 A/B eval。
