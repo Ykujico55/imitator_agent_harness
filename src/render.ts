@@ -7,7 +7,7 @@ const fence = (content: string): string => {
 
 function assessmentTable(item: RepositoryAssessment): string {
   const d = item.dimensions;
-  return `| ${item.repository.fullName} | ${item.overall} | ${d.domainMatch.score} | ${d.engineeringMaturity.score} | ${d.transferability.score} | ${d.patternClarity.score} | ${d.designQuality.score} | ${d.risk.score} | ${item.accepted ? "yes" : "no"} |`;
+  return `| ${item.repository.fullName} | ${item.selectionOrigin ?? "automatic"} | ${item.overall} | ${d.domainMatch.score} | ${d.engineeringMaturity.score} | ${d.transferability.score} | ${d.patternClarity.score} | ${d.designQuality.score} | ${d.risk.score} | ${item.accepted ? "yes" : "no"} |`;
 }
 
 export function inferPractices(pack: Pick<ReferencePack, "assessments" | "slices">): string[] {
@@ -24,11 +24,14 @@ export function inferPractices(pack: Pick<ReferencePack, "assessments" | "slices
 
 export function renderReference(pack: ReferencePack): string {
   const accepted = pack.assessments.filter((item) => item.accepted);
+  const specified = pack.selection?.specified.map((item) => `- ${item.repository}${item.revision ? `@${item.revision}` : ""}: ${item.status} — ${item.reasons.join("; ")}`) ?? [];
   const lines = [
     "# Precedent reference pack", "", `Task: ${pack.task.task}`, `Generated: ${pack.generatedAt}`, "",
     "## Decision summary", "", "Scores are heuristics, not proof. Risk is inverse: lower is safer.", "",
-    "| Repository | Overall | Domain | Maturity | Transfer | Clarity | Design | Risk | Accepted |",
-    "|---|---:|---:|---:|---:|---:|---:|---:|:---:|", ...pack.assessments.map(assessmentTable), "",
+    `Learning set: ${pack.selection?.selectedRepositories.join(", ") || "none"} (hard limit: ${pack.selection?.maximumLearningRepositories ?? 2})`, "",
+    ...(specified.length ? ["### User-specified reference evaluation", "", ...specified, ""] : []),
+    "| Repository | Origin | Overall | Domain | Maturity | Transfer | Clarity | Design | Risk | Accepted |",
+    "|---|---|---:|---:|---:|---:|---:|---:|---:|:---:|", ...pack.assessments.map(assessmentTable), "",
     `Accepted ${accepted.length} of ${pack.assessments.length} inspected repositories.`, "",
     "## Transferable practices", "", ...pack.practices.map((practice) => `- ${practice}`), "", "## Evidence slices", "",
   ];

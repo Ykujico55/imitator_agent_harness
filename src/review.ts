@@ -9,6 +9,7 @@ import type {
   ReviewSubmission,
   ReviewVerdict,
 } from "./types.ts";
+import { MAX_LEARNING_REPOSITORIES } from "./reference.ts";
 
 const riskRank: Record<ReviewRisk, number> = { low: 0, medium: 1, high: 2 };
 const verdicts = new Set<ReviewVerdict>(["adopt", "adapt", "reject", "pending"]);
@@ -21,14 +22,20 @@ export function fingerprintReferencePack(pack: ReferencePack): string {
     task: pack.task,
     repositories: pack.assessments.map((item) => [item.repository.fullName, item.repository.resolvedRevision, item.accepted]),
     slices: pack.slices.map((slice) => slice.id),
+    selection: pack.selection,
   };
   return createHash("sha256").update(JSON.stringify(identity)).digest("hex");
 }
 
 export function buildReviewRequest(pack: ReferencePack): ReviewRequest {
-  const candidates = pack.assessments.filter((item) => item.accepted).map((assessment) => ({
+  const repositoriesWithEvidence = new Set(pack.slices.map((slice) => slice.repository));
+  const candidates = pack.assessments
+    .filter((item) => item.accepted && repositoriesWithEvidence.has(item.repository.fullName))
+    .slice(0, MAX_LEARNING_REPOSITORIES)
+    .map((assessment) => ({
     repository: assessment.repository.fullName,
     repositoryUrl: assessment.repository.htmlUrl,
+    selectionOrigin: assessment.selectionOrigin ?? "automatic",
     license: assessment.repository.license,
     phaseOneOverall: assessment.overall,
     dimensions: assessment.dimensions,
@@ -51,6 +58,7 @@ export function buildReviewRequest(pack: ReferencePack): ReviewRequest {
       "Judge architectural fit against the local task, failure model, scale, language, operations, and license.",
       "Use adopt only for a directly fitting pattern, adapt when local changes are required, and reject on negative transfer.",
       "Every adopt or adapt decision must cite evidence slice IDs and state transferable patterns, mismatches, and risks.",
+      "Approve no more than two coherent learning repositories; prefer a user-specified repository when it passes the same gate.",
     ],
     candidates,
   };
@@ -124,7 +132,11 @@ export function parseReviewSubmission(value: unknown): ReviewSubmission {
 export function applyReviewGate(pack: ReferencePack, submission: ReviewSubmission, config: HarnessConfig): GateResult {
   const fingerprint = fingerprintReferencePack(pack);
   if (submission.referencePackFingerprint !== fingerprint) throw new Error("Review submission belongs to a different or modified reference pack");
-  const accepted = new Map(pack.assessments.filter((item) => item.accepted).map((item) => [item.repository.fullName, item]));
+  const repositoriesWithEvidence = new Set(pack.slices.map((slice) => slice.repository));
+  const accepted = new Map(pack.assessments
+    .filter((item) => item.accepted && repositoriesWithEvidence.has(item.repository.fullName))
+    .slice(0, MAX_LEARNING_REPOSITORIES)
+    .map((item) => [item.repository.fullName, item]));
   const sliceById = new Map(pack.slices.map((slice) => [slice.id, slice]));
   const decisions = new Map<string, RepositoryReviewDecision>();
   for (const decision of submission.decisions) {

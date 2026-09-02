@@ -29,8 +29,8 @@ npx pi -e ./integrations/pi/index.ts
 ## Agent 工作流
 
 1. 会话开始时状态为 `idle`，修改与 shell 工具被拦截。
-2. Agent 调用 `imitator_prepare`，传入具体任务以及可选查询、语言、生态和约束。
-3. 返回值只有候选评分、许可证、切片 ID、路径、行号和选择理由，不包含全部代码。
+2. Agent 调用 `imitator_prepare`，传入具体任务以及可选查询、语言、生态、约束和最多两个 `referenceRepositories`。每项包含 GitHub `owner/repo` 或 URL，以及可选 branch/tag/commit。
+3. 指定仓库先走相同的六维与许可证评估。通过者优先进入学习集合；拒绝或不可用时，Pi 返回明确原因并自动运行默认发现。返回值只有最终 1–2 个候选的评分、来源类型、许可证、切片 ID、路径、行号和选择理由，不包含全部代码。
 4. Agent 用 `imitator_get_evidence` 按需读取最多 6 个切片。返回内容有明确的 `UNTRUSTED EVIDENCE` 边界，评审不能引用尚未读取的 ID。
 5. Agent 用 `imitator_submit_review` 提交每个仓库的 adopt/adapt/reject、置信度、风险、范式、错配、风险说明和引用切片；通过后进入 `awaiting_confirmation`，仍不解锁。
 6. 人第一次执行 `/imitator-confirm`，核对任务指纹和 provisional 仓库；自动化 eval 则由第一个隔离 judge 确认。成功后只进入 `distilling`，编码仍锁定。
@@ -55,6 +55,8 @@ npx pi -e ./integrations/pi/index.ts
 - `reference-approved/`：第一次确认后的引用集合、确认记录、Design Dossier request/template；
 - `design-proposal/`：确认前可读的 dossier、adaptation brief 和 deterministic gate 结果；
 - `approved/`：两份确认、最终 dossier、许可证/来源保留的引用、local adaptation brief，以及不含远程源码的 `APPROVED_AGENT_CONTEXT.md`。
+
+`manifest.json.selection` 记录硬上限、是否使用自动搜索、每个用户指定仓库的 accepted/rejected/unavailable 结果、原因和解析后的 commit，以及进入阶段一 evidence space 的仓库。该 selection 同样进入 reference-pack fingerprint，修改指定来源会使旧状态失效。
 
 ## 门禁与能力边界
 

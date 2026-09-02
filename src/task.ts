@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { TaskIdentity, TaskSpec } from "./types.ts";
+import { normalizeSpecifiedRepositories } from "./reference.ts";
 
 function normalizeText(value: string | undefined): string | undefined {
   const normalized = value?.trim().replace(/\s+/g, " ");
@@ -20,6 +21,7 @@ export function normalizeTaskSpec(task: TaskSpec): TaskSpec {
     ecosystem: normalizeText(task.ecosystem)?.toLowerCase(),
     mustHave: normalizeList(task.mustHave),
     avoid: normalizeList(task.avoid),
+    referenceRepositories: normalizeSpecifiedRepositories(task.referenceRepositories),
   };
 }
 

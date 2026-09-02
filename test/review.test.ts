@@ -117,8 +117,45 @@ test("rejects modified packs, forged evidence IDs, and malformed structured outp
   const wrongPack = structuredClone(pack);
   wrongPack.generatedAt = "2026-09-02T00:00:00.000Z";
   assert.throws(() => applyReviewGate(wrongPack, approvedSubmission(pack), defaultConfig), /different or modified/);
+  const changedSelection = structuredClone(pack);
+  changedSelection.selection = {
+    schemaVersion: 1,
+    maximumLearningRepositories: 2,
+    automaticSearchUsed: false,
+    specified: [{ repository: "example/coding-agent", status: "accepted", resolvedRevision: "abc123def456", reasons: ["passed"] }],
+    selectedRepositories: ["example/coding-agent"],
+  };
+  assert.notEqual(fingerprintReferencePack(changedSelection), fingerprintReferencePack(pack));
   const forged = approvedSubmission(pack);
   forged.decisions[0]!.evidenceSliceIds = ["does-not-exist"];
   assert.throws(() => applyReviewGate(pack, forged, defaultConfig), /Unknown evidence slice ID/);
   assert.throws(() => parseReviewSubmission({ schemaVersion: 1, referencePackFingerprint: "x", reviewer: "x", decisions: [{ confidence: 2 }] }), /verdict must be a string/);
+});
+
+test("exposes and approves no more than two coherent learning repositories", () => {
+  const pack = packFixture();
+  const baseAssessment = pack.assessments[0]!;
+  const baseSlice = pack.slices[0]!;
+  pack.assessments = ["example/one", "example/two", "example/three"].map((fullName) => ({
+    ...structuredClone(baseAssessment),
+    repository: { ...structuredClone(baseAssessment.repository), fullName, htmlUrl: `https://github.com/${fullName}` },
+  }));
+  pack.slices = pack.assessments.map((assessment, index) => ({
+    ...structuredClone(baseSlice),
+    id: `slice-${index + 1}`,
+    repository: assessment.repository.fullName,
+    repositoryUrl: assessment.repository.htmlUrl,
+  }));
+  assert.equal(buildReviewRequest(pack).candidates.length, 2);
+  const decisions = pack.assessments.map((assessment, index) => ({
+    ...approvedSubmission(pack).decisions[0]!,
+    repository: assessment.repository.fullName,
+    evidenceSliceIds: [`slice-${index + 1}`],
+  }));
+  assert.throws(() => applyReviewGate(pack, {
+    schemaVersion: 1,
+    referencePackFingerprint: fingerprintReferencePack(pack),
+    reviewer: "reviewer",
+    decisions,
+  }, defaultConfig), /unaccepted or unknown repository: example\/three/);
 });

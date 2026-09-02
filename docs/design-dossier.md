@@ -8,7 +8,7 @@ Design Dossier 是 reference selection 与实际编码之间的压缩层。它�
 
 ## 必填结构
 
-一份 schema v1 dossier 绑定 `taskFingerprint`、`referencePackFingerprint`、作者和全部已确认仓库，并包含：
+一份 schema v1 dossier 绑定 `taskFingerprint`、`referencePackFingerprint`、作者和全部已确认仓库，并且仓库数必须为 1–2 个。它包含：
 
 - `localContext`：本地硬约束、既有惯例和质量属性，防止上游设计覆盖本地事实；
 - `principles`：问题、约束、决定、机制、权衡、非目标、适用与失效条件；

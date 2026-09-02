@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { EvidenceSlice, HarnessConfig, RepositoryAssessment, TaskSpec, TreeEntry } from "./types.ts";
 import type { GitHubClient } from "./github.ts";
 import { taskTerms } from "./query.ts";
+import { learningRepositoryLimit } from "./reference.ts";
 
 export type SliceWindow = {
   start: number;
@@ -113,7 +114,7 @@ export async function collectSlices(
   const terms = taskTerms(task);
   const slices: EvidenceSlice[] = [];
   let characters = 0;
-  for (const assessment of assessments.filter((item) => item.accepted).slice(0, config.slicing.maxRepositories)) {
+  for (const assessment of assessments.filter((item) => item.accepted).slice(0, learningRepositoryLimit(config.slicing.maxRepositories))) {
     const repo = assessment.repository;
     const ranked = diversifyPaths(rankPaths(repo.tree, terms), config.slicing.maxFilesPerRepository);
     for (const candidate of ranked) {

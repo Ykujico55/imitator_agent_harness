@@ -6,6 +6,7 @@ import { loadConfig } from "./config.ts";
 import { GitHubClient } from "./github.ts";
 import { prepareReferencePack, writeGateResult, writeReferencePack } from "./pipeline.ts";
 import { applyReviewGate, parseReviewSubmission } from "./review.ts";
+import { parseRepositorySpecifier } from "./reference.ts";
 import type { ReferencePack } from "./types.ts";
 
 const HELP = `imitator-agent-harness
@@ -21,6 +22,7 @@ Options:
   --query <query>     Explicit GitHub query; repeatable
   --language <name>   GitHub language qualifier
   --ecosystem <name>  Additional task/domain signal
+  --reference <repo>  Preferred GitHub owner/repo[@revision] or URL; repeatable, max 2
   --config <path>     JSON configuration file
   --out <directory>   Output root (default: .imitator/reference)
   --token <token>     GitHub token; prefer GITHUB_TOKEN or GH_TOKEN
@@ -40,6 +42,7 @@ async function prepareCommand(): Promise<void> {
     options: {
       task: { type: "string" }, query: { type: "string", multiple: true },
       language: { type: "string" }, ecosystem: { type: "string" }, config: { type: "string" },
+      reference: { type: "string", multiple: true },
       out: { type: "string", default: ".imitator/reference" }, token: { type: "string" },
       json: { type: "boolean", default: false }, help: { type: "boolean", short: "h" },
     },
@@ -51,12 +54,17 @@ async function prepareCommand(): Promise<void> {
   const client = new GitHubClient({ token: values.token ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN });
   const pack = await prepareReferencePack(client, {
     task: values.task, queries: values.query, language: values.language, ecosystem: values.ecosystem,
+    referenceRepositories: values.reference?.map(parseRepositorySpecifier),
   }, config);
   const directory = await writeReferencePack(pack, values.out!);
   if (values.json) console.log(JSON.stringify(pack, null, 2));
   else {
     console.log(`Reference pack: ${directory}`);
     console.log(`Inspected: ${pack.assessments.length}; accepted: ${pack.assessments.filter((item) => item.accepted).length}; slices: ${pack.slices.length}`);
+    for (const specified of pack.selection?.specified ?? []) {
+      console.log(`Specified ${specified.repository}: ${specified.status} — ${specified.reasons.join("; ")}`);
+    }
+    console.log(`Learning repositories: ${pack.selection?.selectedRepositories.join(", ") || "none"}`);
   }
 }
 

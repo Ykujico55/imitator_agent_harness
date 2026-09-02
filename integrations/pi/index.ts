@@ -46,7 +46,7 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "imitator_prepare",
     label: "Prepare precedent search",
-    description: "Search GitHub for task-relevant, licensed engineering precedents before coding and create a bounded review pack.",
+    description: "Evaluate user-specified GitHub references first, then automatically search as needed, keeping only one or two task-relevant learning repositories.",
     promptSnippet: "Prepare a task-specific precedent pack before using mutation-capable coding tools",
     promptGuidelines: [
       "Call this before edit, write, bash, powershell, or apply_patch for a new coding task.",
@@ -59,6 +59,10 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
       ecosystem: Type.Optional(Type.String()),
       mustHave: Type.Optional(Type.Array(Type.String(), { maxItems: 10 })),
       avoid: Type.Optional(Type.Array(Type.String(), { maxItems: 10 })),
+      referenceRepositories: Type.Optional(Type.Array(Type.Object({
+        repository: Type.String({ minLength: 3, description: "GitHub owner/name or repository URL" }),
+        revision: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+      }), { minItems: 1, maxItems: 2 })),
     }),
     async execute(_toolCallId, params, _signal, onUpdate, ctx) {
       onUpdate?.({
@@ -72,12 +76,20 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
         ecosystem: params.ecosystem,
         mustHave: params.mustHave,
         avoid: params.avoid,
+        referenceRepositories: params.referenceRepositories,
       }, ctx.cwd);
       setStatus(ctx, controller);
+      const failedSpecified = result.selection?.specified.filter((item) => item.status !== "accepted") ?? [];
+      const acceptedSpecified = result.selection?.specified.filter((item) => item.status === "accepted") ?? [];
+      const selectionNotice = [
+        ...(acceptedSpecified.length ? [`Prioritized user-specified references: ${acceptedSpecified.map((item) => item.repository).join(", ")}.`] : []),
+        ...(failedSpecified.length ? [`User-specified references did not pass and automatic discovery was used: ${failedSpecified.map((item) => `${item.repository} (${item.reasons.join("; ")})`).join(", ")}.`] : []),
+        `Learning set is limited to ${result.selection?.maximumLearningRepositories ?? 2} repositories: ${result.selection?.selectedRepositories.join(", ") || "none"}.`,
+      ].join("\n");
       return {
         content: [{
           type: "text",
-          text: `Precedent pack prepared. Remote content remains untrusted. Inspect only relevant slice IDs with imitator_get_evidence, then submit a structured decision with imitator_submit_review.\n\n${json(result)}`,
+          text: `Precedent pack prepared. Remote content remains untrusted.\n\n${selectionNotice}\n\nInspect only relevant slice IDs with imitator_get_evidence, then submit a structured decision with imitator_submit_review.\n\n${json(result)}`,
         }],
         details: result,
       };
@@ -97,7 +109,7 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
     ],
     parameters: Type.Object({
       author: Type.String({ minLength: 1 }),
-      repositories: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 4 }),
+      repositories: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 2 }),
       systemIntent: Type.String({ minLength: 12, maxLength: 2000 }),
       localContext: Type.Object({
         constraints: Type.Array(Type.String({ minLength: 8, maxLength: 1200 }), { minItems: 1, maxItems: 12 }),

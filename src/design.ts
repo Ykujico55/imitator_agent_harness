@@ -11,6 +11,7 @@ import type {
   SpecificationConcept,
   TestConcept,
 } from "./types.ts";
+import { MAX_LEARNING_REPOSITORIES } from "./reference.ts";
 
 const ID = /^[a-z][a-z0-9_-]{2,63}$/;
 const TEST_LAYERS = new Set(["unit", "integration", "contract", "property", "end-to-end"]);
@@ -193,6 +194,7 @@ export function evaluateDesignDossier(
   const approvedRepositories = new Set(referenceGate.approvedPack.assessments.map((item) => item.repository.fullName));
   const dossierRepositories = new Set(dossier.repositories);
   if (!dossierRepositories.size) reasons.push("Dossier names no reference repositories");
+  if (dossierRepositories.size > MAX_LEARNING_REPOSITORIES) reasons.push(`Dossier exceeds the ${MAX_LEARNING_REPOSITORIES}-repository learning limit`);
   if (dossierRepositories.size !== dossier.repositories.length) reasons.push("Dossier contains duplicate repository names");
   for (const repository of dossierRepositories) if (!approvedRepositories.has(repository)) reasons.push(`Dossier uses an unapproved repository: ${repository}`);
   for (const repository of approvedRepositories) if (!dossierRepositories.has(repository)) reasons.push(`Dossier omits a confirmed reference repository: ${repository}`);

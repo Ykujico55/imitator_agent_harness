@@ -44,7 +44,7 @@ export class GitHubClient {
       headers: {
         Accept: "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "imitator-agent-harness/0.1",
+        "User-Agent": "imitator-agent-harness/0.6",
         ...(this.#token ? { Authorization: `Bearer ${this.#token}` } : {}),
       },
     });
@@ -64,14 +64,24 @@ export class GitHubClient {
     return result.items;
   }
 
-  async profile(repository: GitHubRepository): Promise<RepositoryProfile> {
+  async getRepository(fullName: string): Promise<GitHubRepository> {
+    const [owner, name] = fullName.split("/");
+    if (!owner || !name) throw new GitHubError(`Invalid repository name: ${fullName}`);
+    return this.#json<GitHubRepository>(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`);
+  }
+
+  async profile(repository: GitHubRepository, requestedRevision?: string): Promise<RepositoryProfile> {
     const [owner, name] = repository.full_name.split("/");
     if (!owner || !name) throw new GitHubError(`Invalid repository name: ${repository.full_name}`);
+    const revision = requestedRevision ?? repository.default_branch;
+    const commit = await this.#json<{ sha: string }>(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/commits/${encodeURIComponent(revision)}`,
+    );
     const result = await this.#json<{
       sha: string;
       tree: Array<{ path: string; type: string; sha: string; size?: number }>;
       truncated?: boolean;
-    }>(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/trees/${encodeURIComponent(repository.default_branch)}?recursive=1`);
+    }>(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/git/trees/${encodeURIComponent(commit.sha)}?recursive=1`);
     const tree: TreeEntry[] = result.tree
       .filter((entry): entry is typeof entry & { type: "blob" | "tree" } => entry.type === "blob" || entry.type === "tree")
       .map((entry) => ({ path: entry.path, type: entry.type, sha: entry.sha, size: entry.size }));
@@ -86,7 +96,7 @@ export class GitHubClient {
       archived: repository.archived,
       fork: repository.fork,
       defaultBranch: repository.default_branch,
-      resolvedRevision: result.sha,
+      resolvedRevision: commit.sha,
       pushedAt: repository.pushed_at,
       createdAt: repository.created_at,
       license: repository.license?.spdx_id && repository.license.spdx_id !== "NOASSERTION" ? repository.license.spdx_id : null,

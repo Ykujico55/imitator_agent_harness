@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { HarnessConfig } from "./types.ts";
+import { learningRepositoryLimit, MAX_LEARNING_REPOSITORIES } from "./reference.ts";
 
 export const defaultConfig: HarnessConfig = {
   github: {
@@ -14,7 +15,7 @@ export const defaultConfig: HarnessConfig = {
     allowedLicenses: ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC"],
   },
   slicing: {
-    maxRepositories: 4,
+    maxRepositories: MAX_LEARNING_REPOSITORIES,
     maxFilesPerRepository: 12,
     maxLinesPerSlice: 60,
     maxSlices: 48,
@@ -30,10 +31,12 @@ export const defaultConfig: HarnessConfig = {
 export async function loadConfig(path?: string): Promise<HarnessConfig> {
   if (!path) return structuredClone(defaultConfig);
   const input = JSON.parse(await readFile(path, "utf8")) as Partial<HarnessConfig>;
+  const slicing = { ...defaultConfig.slicing, ...input.slicing };
+  slicing.maxRepositories = learningRepositoryLimit(slicing.maxRepositories);
   return {
     github: { ...defaultConfig.github, ...input.github },
     acceptance: { ...defaultConfig.acceptance, ...input.acceptance },
-    slicing: { ...defaultConfig.slicing, ...input.slicing },
+    slicing,
     review: { ...defaultConfig.review, ...input.review },
   };
 }

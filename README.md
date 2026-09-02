@@ -6,17 +6,19 @@
 
 ```text
 任务 → 多查询召回 → 仅读取仓库画像 → 六维评分/许可证门禁
-     → AST/窗口切片 → 参考选择 proposal → 独立确认
+     → 选出 1 个主蓝图（最多 1 个补充蓝图）→ AST/窗口切片
+     → 参考选择 proposal → 独立确认
      → Design Dossier → 独立确认 → 本地适配契约 → coding agent
 ```
 
-## 已实现的 v0.5 工作流
+## 已实现的 v0.6 工作流
 
 - GitHub Repository API 多查询检索、去重和并发画像。
 - 领域匹配、工程成熟度、可迁移性、范式清晰度、设计合理性、风险六维可解释评分。
 - 默认宽松许可证 allowlist；无许可证仓库不会进入参考上下文。
 - 路径排序与固定行数窗口切片，总文件数、切片数和字符数均受预算限制。
-- 默认证据池支持 4 个仓库、每仓库 12 个文件、总计 48 个切片和 12 万字符；类别配额会随项目规模动态扩展。
+- 最终证据空间硬限制为 1–2 个同领域仓库、每仓库最多 12 个文件、总计 48 个切片和 12 万字符；其余搜索候选不会进入 agent 的学习空间。
+- 默认自动发现最合适的仓库。用户也可显式指定最多两个 GitHub 仓库或 revision：指定项先走同一套领域、成熟度、许可证和风险评估；通过则优先，未通过会明确报告原因并自动回退到默认搜索。
 - 每个切片保留仓库、许可证、分支、文件、行号和 GitHub 链接。
 - 每个切片固定到 commit SHA，并拥有稳定证据 ID。
 - 输出 `manifest.json`、`REFERENCE.md`、`AGENT_CONTEXT.md`、`REVIEW_REQUEST.json` 和 fail-closed 的 `REVIEW_TEMPLATE.json`。
@@ -48,6 +50,17 @@ node src/cli.ts prepare `
   --language TypeScript
 ```
 
+可选地优先评估用户指定蓝图；支持 `owner/repo`、GitHub URL 和 `@branch|tag|commit`：
+
+```powershell
+node src/cli.ts prepare `
+  --task "实现可插拔 coding agent 工具系统" `
+  --reference "owner/preferred-agent@v2.0.0" `
+  --language TypeScript
+```
+
+指定仓库通过时会占据学习集合的最高优先级；失败时 CLI/Pi 会输出具体拒绝原因并继续自动发现。所有实际读取都固定到解析后的 commit SHA。
+
 输出位于 `.imitator/reference/<timestamp>/`。先检查 `REVIEW_REQUEST.json`，复制并填写 `REVIEW_TEMPLATE.json`，再执行第一阶段确定性 gate：
 
 ```powershell
@@ -75,6 +88,8 @@ pi install git:github.com/kunjinkao55/imitator_agent_harness
 4. 人在 Pi 中第一次执行 `/imitator-confirm`，检查任务指纹和仓库；
 5. `imitator_submit_design_dossier`：把已确认证据蒸馏为跨语言设计规格和本地适配图；
 6. 人检查 `design-proposal/DESIGN_DOSSIER.md`，再次执行 `/imitator-confirm` 才解锁编码。
+
+`imitator_prepare` 可额外接收 `referenceRepositories: [{ repository, revision? }]`。即使自动搜索检查了更多候选，后续 evidence、review、dossier 和 implementation context 也只允许来自最终 1–2 个仓库。
 
 至少一个仓库通过选择门禁、且 Design Dossier 通过确定性校验和独立确认后，Pi 的修改与命令工具才会解锁。可用 `/imitator-status` 查看状态，开始新任务前用 `/imitator-reset` 重新上锁；也可用 `/imitator-prepare <任务>` 手动开始检索。
 

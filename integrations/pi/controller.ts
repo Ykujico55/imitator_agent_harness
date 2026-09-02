@@ -258,7 +258,7 @@ export class PiHarnessController {
       taskFingerprint: this.#run?.taskIdentity.fingerprint,
       referencePackFingerprint: this.#run ? fingerprintReferencePack(this.#run.pack) : undefined,
       directory: this.#run?.directory,
-      candidates: this.#run?.pack.assessments.filter((item) => item.accepted).length ?? 0,
+      candidates: this.#run ? new Set(this.#run.pack.slices.map((slice) => slice.repository)).size : 0,
       slices: this.#run?.pack.slices.length ?? 0,
       readSlices: this.#readEvidenceIds.size,
       approvedRepositories: this.#gate?.approvedPack.assessments.length ?? 0,
@@ -295,8 +295,10 @@ export class PiHarnessController {
     directory: string;
     taskFingerprint: string;
     referencePackFingerprint: string;
+    selection?: ReferencePack["selection"];
     candidates: Array<{
       repository: string;
+      selectionOrigin: "user-specified" | "automatic";
       license: string | null;
       overall: number;
       dimensions: ReferencePack["assessments"][number]["dimensions"];
@@ -328,8 +330,10 @@ export class PiHarnessController {
         directory: run.directory,
         taskFingerprint: run.taskIdentity.fingerprint,
         referencePackFingerprint: request.referencePackFingerprint,
+        selection: run.pack.selection,
         candidates: request.candidates.map((candidate) => ({
           repository: candidate.repository,
+          selectionOrigin: candidate.selectionOrigin,
           license: candidate.license,
           overall: candidate.phaseOneOverall,
           dimensions: candidate.dimensions,

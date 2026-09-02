@@ -5,6 +5,26 @@ export type TaskSpec = {
   ecosystem?: string;
   mustHave?: string[];
   avoid?: string[];
+  referenceRepositories?: SpecifiedRepository[];
+};
+
+export type SpecifiedRepository = {
+  repository: string;
+  revision?: string;
+};
+
+export type SpecifiedRepositoryResult = SpecifiedRepository & {
+  status: "accepted" | "rejected" | "unavailable";
+  resolvedRevision?: string;
+  reasons: string[];
+};
+
+export type ReferenceSelection = {
+  schemaVersion: 1;
+  maximumLearningRepositories: 2;
+  automaticSearchUsed: boolean;
+  specified: SpecifiedRepositoryResult[];
+  selectedRepositories: string[];
 };
 
 export type TaskIdentity = {
@@ -49,6 +69,7 @@ export type ScoreDimension = {
 
 export type RepositoryAssessment = {
   repository: RepositoryProfile;
+  selectionOrigin?: "user-specified" | "automatic";
   dimensions: {
     domainMatch: ScoreDimension;
     engineeringMaturity: ScoreDimension;
@@ -113,6 +134,7 @@ export type ReferencePack = {
   assessments: RepositoryAssessment[];
   slices: EvidenceSlice[];
   practices: string[];
+  selection?: ReferenceSelection;
 };
 
 export type ReviewVerdict = "adopt" | "adapt" | "reject" | "pending";
@@ -138,6 +160,7 @@ export type ReviewRequest = {
   candidates: Array<{
     repository: string;
     repositoryUrl: string;
+    selectionOrigin: "user-specified" | "automatic";
     license: string | null;
     phaseOneOverall: number;
     dimensions: RepositoryAssessment["dimensions"];

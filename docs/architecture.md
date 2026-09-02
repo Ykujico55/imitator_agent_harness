@@ -7,15 +7,16 @@
 ## 当前数据流
 
 1. Query planner 从任务、显式查询、语言和生态生成最多五条 GitHub 查询。
-2. Discovery 只读取 repository search、Git tree 和 content API，不 clone 或运行仓库。
-3. Assessor 给六个维度打 0–100 分，其中风险越高越差；许可证、领域最低分和总分是硬门禁。
-4. Slicer 先按路径语义选择文件；TS/JS 适配器优先选择完整 AST 声明或测试单元，其他语言确定性回退到行窗口；预算在字符层硬截止。
-5. Renderer 生成机器可读 manifest、证据文档、防提示注入的 agent 工作协议和 pack-bound 评审请求。
-6. 人或外部 judge 提交结构化决策；deterministic gate 校验 fingerprint、证据 ID、置信度、风险和审查完整性。
-7. Proposal 通过 deterministic gate 后仍进入 `awaiting_confirmation`；只有不同身份的人或独立 agent 才能确认参考集合。
-8. 参考确认后进入 `distilling`。agent 必须把已批准证据转换为语言无关的 Design Dossier，而不是直接编码。
-9. Design gate 验证任务/pack 指纹、仓库和证据归属、本地约束、概念完整性、适用边界、权衡、negative space、本地映射、目标路径、验收测试与 8 万字符预算。
-10. Dossier 通过后进入 `awaiting_design_confirmation`；第二个独立身份确认后才生成最终抽象 agent context、关闭原始证据读取并解锁编码。
+2. 若用户指定 GitHub 仓库或 revision，系统先直接读取其 repository/commit/tree API 并执行相同评估；通过者排在自动候选之前，失败者记录原因并触发默认自动发现。
+3. Discovery 只读取 repository search、commit、Git tree 和 content API，不 clone 或运行仓库。
+4. Assessor 给六个维度打 0–100 分，其中风险越高越差；许可证、领域最低分和总分是硬门禁。无论配置如何，进入 evidence space 的仓库硬限制为 1–2 个。
+5. Slicer 先按路径语义选择文件；TS/JS 适配器优先选择完整 AST 声明或测试单元，其他语言确定性回退到行窗口；预算在字符层硬截止。
+6. Renderer 生成机器可读 manifest、指定仓库评估结果、证据文档、防提示注入的 agent 工作协议和 pack-bound 评审请求。
+7. 人或外部 judge 提交结构化决策；deterministic gate 校验 fingerprint、证据 ID、置信度、风险和审查完整性，并再次限制最多两个仓库。
+8. Proposal 通过 deterministic gate 后仍进入 `awaiting_confirmation`；只有不同身份的人或独立 agent 才能确认参考集合。
+9. 参考确认后进入 `distilling`。agent 必须把已批准证据转换为语言无关的 Design Dossier，而不是直接编码。
+10. Design gate 验证任务/pack 指纹、1–2 个仓库和证据归属、本地约束、概念完整性、适用边界、权衡、negative space、本地映射、目标路径、验收测试与 8 万字符预算。
+11. Dossier 通过后进入 `awaiting_design_confirmation`；第二个独立身份确认后才生成最终抽象 agent context、关闭原始证据读取并解锁编码。
 
 ## 威胁模型
 
@@ -30,7 +31,7 @@
 
 ## 已实现的双层独立确认系统
 
-第一阶段用廉价确定性算法从几十个候选压到 3–6 个。第二阶段通过 `REVIEW_REQUEST.json` 和 `REVIEW_TEMPLATE.json` 与人或任意模型交互。评审必须给出 adopt/adapt/reject、置信度、风险级别、摘要、可迁移范式、错配、风险和证据切片 ID。
+第一阶段用廉价确定性算法从几十个候选压到 1–2 个 coherent learning repositories。用户指定项不会绕过评估，只获得选择优先级；失败时 `selection.specified` 保存拒绝或不可用原因，系统继续自动搜索。第二阶段通过 `REVIEW_REQUEST.json` 和 `REVIEW_TEMPLATE.json` 与人或任意模型交互。评审必须给出 adopt/adapt/reject、置信度、风险级别、摘要、可迁移范式、错配、风险和证据切片 ID。
 
 模板默认是 pending/high-risk/zero-confidence。参考 gate 对 fingerprint 不一致、伪造或跨仓库证据、低置信度、高风险、缺失证据、空范式，以及论证不完整的 adapt 决策全部 fail closed。第一次确认后生成 `reference-approved/` 和 fail-closed 的 Design Dossier request/template。
 
