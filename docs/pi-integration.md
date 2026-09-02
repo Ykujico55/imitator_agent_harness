@@ -2,7 +2,7 @@
 
 ## 目标
 
-Pi extension 把 reference pipeline 接到 coding 生命周期里，但不把 Pi 引入核心。核心仍然负责确定性的 GitHub 发现、评分、切片、评审校验和产物写入；扩展只负责会话协议、渐进读取和修改工具门禁。
+Pi extension 把 reference pipeline 和 Design Dossier 双重门禁接到 coding 生命周期里，但不把 Pi 引入核心。核心仍然负责确定性的 GitHub 发现、评分、切片、评审/设计校验和产物写入；扩展只负责会话协议、渐进读取和修改工具门禁。
 
 远程仓库的 README、源码、注释和测试始终是不可信证据。扩展不会 clone、安装、构建或执行搜索到的仓库。
 
@@ -33,22 +33,32 @@ npx pi -e ./integrations/pi/index.ts
 3. 返回值只有候选评分、许可证、切片 ID、路径、行号和选择理由，不包含全部代码。
 4. Agent 用 `imitator_get_evidence` 按需读取最多 6 个切片。返回内容有明确的 `UNTRUSTED EVIDENCE` 边界，评审不能引用尚未读取的 ID。
 5. Agent 用 `imitator_submit_review` 提交每个仓库的 adopt/adapt/reject、置信度、风险、范式、错配、风险说明和引用切片；通过后进入 `awaiting_confirmation`，仍不解锁。
-6. 人执行 `/imitator-confirm`，核对任务指纹和 provisional 仓库并在交互弹窗确认；自动化 eval 则由隔离 Pi 进程作为 `independent-agent` judge。
-7. 只有 deterministic gate 与独立确认都批准至少一个仓库后才进入 `approved`。系统提示只携带批准范式和证据索引；精确代码仍按需读取。
-8. 新任务执行 `/imitator-reset`，重新锁定修改工具并清空持久状态。
+6. 人第一次执行 `/imitator-confirm`，核对任务指纹和 provisional 仓库；自动化 eval 则由第一个隔离 judge 确认。成功后只进入 `distilling`，编码仍锁定。
+7. Agent 可继续按需读取已批准证据，然后用 `imitator_submit_design_dossier` 提交本地约束、质量属性、跨语言原则、架构职责/失败模式、规格、测试 oracle、适用边界、negative space 和逐项本地映射。
+8. 确定性 design gate 通过后进入 `awaiting_design_confirmation`，提案写入 `design-proposal/DESIGN_DOSSIER.md`。人检查该文件并第二次执行 `/imitator-confirm`；自动 eval 使用第二个隔离 judge。
+9. 只有两层 gate 均确认后才进入 `approved`。系统提示只携带本地化抽象设计契约，不含远程源码或证据 ID；原始证据工具也随即关闭。
+10. 新任务执行 `/imitator-reset`，重新锁定修改工具并清空持久状态。若直接启动新的 prepare，旧状态也会在远程工作前先被清除。
 
 辅助命令：
 
 - `/imitator-status`：显示当前 phase、任务、候选、切片和批准数量；
 - `/imitator-prepare <任务>`：由人显式开始 prepare；
-- `/imitator-confirm`：只在交互式 UI 中进行人工二次确认；
+- `/imitator-confirm`：按当前 phase 确认参考选择或 Design Dossier；
 - `/imitator-reset`：开始新任务或放弃当前参考包。
 
-任务指纹由规范化 TaskSpec、工作区绝对路径和 prepare 时的 Git HEAD 组成。状态写在 `.imitator/pi-state.json`，包括 checksum、任务身份、reference pack、已读取证据、proposal、confirmation 和最终 gate。恢复时重新检查 Git HEAD、任务指纹、pack 指纹和状态结构；不匹配时拒绝恢复。Checksum 用于发现损坏或普通误改，不是抵抗能重算 checksum 的恶意本地进程的密码学签名。
+任务指纹由规范化 TaskSpec、工作区绝对路径和 prepare 时的 Git HEAD 组成。状态写在 `.imitator/pi-state.json`，包括 checksum、任务身份、reference pack、已读取证据、两层 proposal/confirmation 和最终 gate。恢复时会重新计算参考 gate、确认后的参考子集、Design Dossier 指纹和确定性 design gate，并检查 Git HEAD、证据集合与全部绑定；不匹配时拒绝恢复。Checksum 用于发现损坏或普通误改，不是抵抗能重算 checksum 的恶意本地进程的密码学签名。
+
+每次 run 的主要产物：
+
+- 根目录：原始 `manifest.json`、引用文档和 fail-closed review template；
+- `review-proposal/`：第一次确认前的结构化 submission、gate report 和 provisional 引用集合；
+- `reference-approved/`：第一次确认后的引用集合、确认记录、Design Dossier request/template；
+- `design-proposal/`：确认前可读的 dossier、adaptation brief 和 deterministic gate 结果；
+- `approved/`：两份确认、最终 dossier、许可证/来源保留的引用、local adaptation brief，以及不含远程源码的 `APPROVED_AGENT_CONTEXT.md`。
 
 ## 门禁与能力边界
 
-扩展在 `idle`、`preparing`、`reviewing` 和 `blocked` 状态拦截名为 `edit`、`write`、`bash`、`powershell`、`apply_patch` 的工具。普通读取工具不被拦截，agent 仍可先理解本地项目。
+扩展在除 `approved` 外的所有 phase 拦截名为 `edit`、`write`、`bash`、`powershell`、`apply_patch` 的工具。普通本地读取工具不被拦截，agent 仍可先理解本地项目。
 
 这是一条 agent 工作流门禁，不是 OS 安全沙箱：
 
@@ -67,12 +77,13 @@ npm run check
 
 检查包括：
 
-- controller 的 prepare → review → approve → reset 状态机；
-- 二阶段批准前后的修改工具拦截；
+- controller 的 prepare → review → reference confirm → distill → design confirm → approve → reset 状态机；
+- 两层独立确认前后的修改工具拦截；
 - 单次证据读取数量限制和批准后证据收缩；
 - 当前 Pi `DefaultResourceLoader` 对实际 extension 的加载，及工具、命令、事件 handler 注册；
 - 持久状态重启恢复、任务/HEAD 绑定和修改后 checksum 拒绝；
 - proposal reviewer 与 human/independent-agent confirmer 身份分离；
+- Dossier 的证据归属、全概念本地映射、适用边界、本地约束、上下文预算和第二确认身份分离；
 - TypeScript compiler AST 完整声明切片和非支持语言回退；
 - 全部 provider-neutral 核心测试、严格 TypeScript 检查和 CLI 启动。
 

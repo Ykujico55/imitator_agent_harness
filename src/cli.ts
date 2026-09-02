@@ -31,7 +31,7 @@ Gate options:
   --manifest <path>   Reference pack manifest from prepare
   --decisions <path>  Completed REVIEW_TEMPLATE.json
   --config <path>     JSON configuration file
-  --out <directory>   Approved artifact directory (default: <pack>/approved)
+  --out <directory>   Reference-gate artifact directory (default: <pack>/reference-gate)
 `;
 
 async function prepareCommand(): Promise<void> {
@@ -79,10 +79,11 @@ async function gateCommand(): Promise<void> {
   const submission = parseReviewSubmission(JSON.parse(await readFile(values.decisions, "utf8")));
   const config = await loadConfig(values.config);
   const result = applyReviewGate(rawPack, submission, config);
-  const output = values.out ?? resolve(dirname(values.manifest), "approved");
+  const output = values.out ?? resolve(dirname(values.manifest), "reference-gate");
   const directory = await writeGateResult(result, submission, output);
   console.log(`Gate artifacts: ${directory}`);
   console.log(`Phase-one: ${result.results.length}; approved: ${result.results.filter((item) => item.approved).length}; slices: ${result.approvedPack.slices.length}`);
+  console.log("This is a reference-selection result only; it does not replace independent confirmation or Design Dossier approval.");
 }
 
 async function main(): Promise<void> {

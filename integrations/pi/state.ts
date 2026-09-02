@@ -3,15 +3,25 @@ import { execFile } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
-import type { GateResult, HarnessConfig, ReferencePack, ReviewConfirmation, ReviewSubmission, TaskIdentity } from "../../src/types.ts";
+import type {
+  DesignConfirmation,
+  DesignDossier,
+  DesignGateResult,
+  GateResult,
+  HarnessConfig,
+  ReferencePack,
+  ReviewConfirmation,
+  ReviewSubmission,
+  TaskIdentity,
+} from "../../src/types.ts";
 import { createTaskIdentity } from "../../src/task.ts";
 
 const execFileAsync = promisify(execFile);
 
-export type PersistedPiPhase = "reviewing" | "awaiting_confirmation" | "approved" | "blocked";
+export type PersistedPiPhase = "reviewing" | "awaiting_confirmation" | "distilling" | "awaiting_design_confirmation" | "approved" | "blocked";
 
 export type PersistedPiPayload = {
-  schemaVersion: 1;
+  schemaVersion: 2;
   phase: PersistedPiPhase;
   run: {
     pack: ReferencePack;
@@ -23,11 +33,15 @@ export type PersistedPiPayload = {
   submission?: ReviewSubmission;
   provisionalGate?: GateResult;
   confirmation?: ReviewConfirmation;
-  finalGate?: GateResult;
+  referenceGate?: GateResult;
+  designDossier?: DesignDossier;
+  provisionalDesignGate?: DesignGateResult;
+  designConfirmation?: DesignConfirmation;
+  finalDesignGate?: DesignGateResult;
   savedAt: string;
 };
 
-type PersistedPiEnvelope = { schemaVersion: 1; checksum: string; payload: PersistedPiPayload };
+type PersistedPiEnvelope = { schemaVersion: 2; checksum: string; payload: PersistedPiPayload };
 
 function checksum(payload: PersistedPiPayload): string {
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
@@ -67,7 +81,7 @@ export class FilePiStateStore implements PiStateStore {
   async load(cwd: string): Promise<PersistedPiPayload | undefined> {
     try {
       const envelope = JSON.parse(await readFile(this.path(cwd), "utf8")) as PersistedPiEnvelope;
-      if (envelope.schemaVersion !== 1 || envelope.payload?.schemaVersion !== 1 || envelope.checksum !== checksum(envelope.payload)) {
+      if (envelope.schemaVersion !== 2 || envelope.payload?.schemaVersion !== 2 || envelope.checksum !== checksum(envelope.payload)) {
         throw new Error("Persisted Pi state failed its integrity check");
       }
       return envelope.payload;
@@ -80,7 +94,7 @@ export class FilePiStateStore implements PiStateStore {
   async save(cwd: string, payload: PersistedPiPayload): Promise<void> {
     const path = this.path(cwd);
     await mkdir(dirname(path), { recursive: true });
-    const envelope: PersistedPiEnvelope = { schemaVersion: 1, checksum: checksum(payload), payload };
+    const envelope: PersistedPiEnvelope = { schemaVersion: 2, checksum: checksum(payload), payload };
     await writeFile(path, `${JSON.stringify(envelope, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   }
 

@@ -1,15 +1,16 @@
 # Imitator Agent Harness
 
-在 coding agent 动手前，先从 GitHub 找到相近领域的成熟实现，把“可迁移的工程范式”压缩成一个有边界、有出处、可审计的参考包。
+在 coding agent 动手前，先从 GitHub 找到相近领域的成熟实现，再把其中的架构判断、规格约束、失败语义和测试思想压缩成一份有边界、有出处、可审计的 Design Dossier。实现 agent 学习的是优秀作品在约束下做决定的方式，而不是它的语言、目录或代码形状。
 
 这不是代码复制器，也不是“按 Star 排序后把整个仓库塞进上下文”。它实现的是一个保守的 precedent pipeline：
 
 ```text
 任务 → 多查询召回 → 仅读取仓库画像 → 六维评分/许可证门禁
-     → 路径与窗口级切片 → 结构化二阶段评审 → 准入 gate → 本地 coding agent
+     → AST/窗口切片 → 参考选择 proposal → 独立确认
+     → Design Dossier → 独立确认 → 本地适配契约 → coding agent
 ```
 
-## 已实现的 MVP
+## 已实现的 v0.5 工作流
 
 - GitHub Repository API 多查询检索、去重和并发画像。
 - 领域匹配、工程成熟度、可迁移性、范式清晰度、设计合理性、风险六维可解释评分。
@@ -21,10 +22,15 @@
 - 输出 `manifest.json`、`REFERENCE.md`、`AGENT_CONTEXT.md`、`REVIEW_REQUEST.json` 和 fail-closed 的 `REVIEW_TEMPLATE.json`。
 - 人或任意模型可填写结构化评审；gate 校验 pack 指纹、证据归属、置信度、风险、范式、错配和风险说明。
 - gate 只输出明确批准且被引用的切片，未评审推断不会进入最终 agent 上下文。
-- 提供 Pi extension：自动注入工作协议，在 precedent 二阶段评审通过前拦截 `edit`、`write`、`bash`、`powershell` 和 `apply_patch`。
-- Pi 通过三个渐进式工具完成搜索、按 ID 读取最多 6 个证据切片、提交结构化评审；不会把整份参考包直接塞进会话。
+- 提供 Pi extension：自动注入工作协议，在参考选择和 Design Dossier 双重门禁通过前拦截 `edit`、`write`、`bash`、`powershell` 和 `apply_patch`。
+- Pi 通过四个渐进式工具完成搜索、按 ID 读取最多 6 个证据切片、提交结构化评审和设计蒸馏；不会把整份参考包直接塞进会话。
 - 任务指纹绑定规范化任务、工作区路径和 prepare 时的 Git HEAD；Pi 状态带完整性校验持久化到 `.imitator/pi-state.json`，重启可恢复，基线变化则 fail closed。
 - Coding agent 的评审只是 proposal；必须由 `/imitator-confirm` 的交互式人工确认，或隔离的独立 judge 身份确认后才能解锁。
+- 参考确认只会进入 `distilling`，不会解锁编码；agent 还必须提交 evidence-bound、语言无关的 Design Dossier。
+- Dossier 强制描述本地约束/既有惯例/质量属性、设计原则、架构职责与失败模式、规格、测试 oracle、适用与失效条件、权衡、negative space，以及逐项 adopt/adapt/reject 的本地映射。
+- 每个参考派生概念必须引用已批准证据；所有已确认仓库都必须被解释，所有概念都必须有本地决策，非 reject 项必须有目标路径和验收测试。
+- Dossier 有 8 万字符及分区数量硬预算；最终 agent context 只含抽象设计契约，不含远程源码或证据 ID。Design 批准后，Pi 也不再向实现 agent 返回原始远程切片。
+- Dossier 先写入 `design-proposal/` 供人工或 judge 审阅；只有不同身份的第二次确认后才进入最终 `approved/` 并解锁。
 - Pi 对 TypeScript/JavaScript 使用 compiler AST 选择完整接口、类型、类、函数或测试单元；其他语言确定性回退到行窗口。
 - 提供默认不执行的真实模型 paired A/B eval runner，对比 baseline 与 Imitator + 独立 judge，并记录验收通过率、耗时和变更文件数。
 - 不 clone、不安装、不构建、不执行上游内容；远程文本永远按不可信数据处理。
@@ -42,7 +48,7 @@ node src/cli.ts prepare `
   --language TypeScript
 ```
 
-输出位于 `.imitator/reference/<timestamp>/`。先检查 `REVIEW_REQUEST.json`，复制并填写 `REVIEW_TEMPLATE.json`，再执行：
+输出位于 `.imitator/reference/<timestamp>/`。先检查 `REVIEW_REQUEST.json`，复制并填写 `REVIEW_TEMPLATE.json`，再执行第一阶段确定性 gate：
 
 ```powershell
 node src/cli.ts gate `
@@ -50,7 +56,7 @@ node src/cli.ts gate `
   --decisions ".imitator/reference/<timestamp>/REVIEW_TEMPLATE.json"
 ```
 
-最终只把 `approved/APPROVED_AGENT_CONTEXT.md` 和按需选中的 `approved/APPROVED_REFERENCE.md` 片段交给 Pi、Codex 或其他 agent。
+CLI 的 `gate` 只验证参考选择，不代表最终授权编码。完整的任务指纹、两次独立确认、Design Dossier 与修改门禁目前由 Pi 集成承载；provider-neutral 核心同时导出了相同的评估、确认和产物 API，供其他 agent harness 接入。
 
 ## 接入 Pi coding agent
 
@@ -61,14 +67,16 @@ npm install -g @earendil-works/pi-coding-agent
 pi install git:github.com/kunjinkao55/imitator_agent_harness
 ```
 
-在目标项目中设置 `GITHUB_TOKEN` 后启动 `pi`。扩展会要求 agent 依次调用：
+在目标项目中设置 `GITHUB_TOKEN` 后启动 `pi`。扩展会要求 agent 依次完成：
 
 1. `imitator_prepare`：为当前任务检索、评分和切片；
 2. `imitator_get_evidence`：只读取当前决策所需的少量切片；
 3. `imitator_submit_review`：提交带证据 ID 的 adopt/adapt/reject proposal；
-4. 人在 Pi 中执行 `/imitator-confirm`，检查弹窗中的任务指纹和仓库后确认。
+4. 人在 Pi 中第一次执行 `/imitator-confirm`，检查任务指纹和仓库；
+5. `imitator_submit_design_dossier`：把已确认证据蒸馏为跨语言设计规格和本地适配图；
+6. 人检查 `design-proposal/DESIGN_DOSSIER.md`，再次执行 `/imitator-confirm` 才解锁编码。
 
-至少一个仓库同时通过确定性 gate 和独立确认后，Pi 的修改与命令工具才会解锁。可用 `/imitator-status` 查看状态，开始新任务前用 `/imitator-reset` 重新上锁；也可用 `/imitator-prepare <任务>` 手动开始检索。
+至少一个仓库通过选择门禁、且 Design Dossier 通过确定性校验和独立确认后，Pi 的修改与命令工具才会解锁。可用 `/imitator-status` 查看状态，开始新任务前用 `/imitator-reset` 重新上锁；也可用 `/imitator-prepare <任务>` 手动开始检索。
 
 本地开发时无需安装 package：
 
@@ -87,7 +95,7 @@ npx pi -e ./integrations/pi/index.ts
 npm run eval:pi -- --suite eval-suite.example.json --provider <provider> --model <model>
 ```
 
-确认计划、预计调用数、模型认证和本地验收命令后，才显式加入 `--execute`。Imitator 组每次使用 proposal agent、隔离 judge、implementation agent 三次调用，baseline 使用一次调用。完整协议见 [真实模型评估说明](docs/evaluation.md)。
+确认计划、预计调用数、模型认证和本地验收命令后，才显式加入 `--execute`。Imitator 组最多使用参考 proposal、参考 judge、设计蒸馏、设计 judge、implementation 五次调用，baseline 使用一次调用。完整协议见 [真实模型评估说明](docs/evaluation.md)。
 
 可复制示例配置：
 
@@ -112,4 +120,4 @@ Pi 只是一层薄适配器：“参考发现”和 deterministic gate 仍是可
 
 ## 当前边界与后续演进
 
-见 [架构与路线图](docs/architecture.md)。当前已经实现 provider-neutral 的结构化协议、Pi 持久门禁、人工/独立 judge 确认、TS/JS AST 切片和可执行的 paired A/B eval。尚未产生真实模型实验数据；后续重点是更多语言 parser、项目本地规范匹配、任务切换检测和 30–50 个真实任务的重复实验。
+见 [Design Dossier 协议](docs/design-dossier.md) 与 [架构和边界](docs/architecture.md)。当前已经实现 provider-neutral 的结构化协议、Pi 双重持久门禁、人工/独立 judge 确认、TS/JS AST 切片和五阶段 paired A/B eval。尚未产生真实模型实验数据；未知名称的第三方修改工具按此前范围选择暂未纳入门禁。后续重点是更多语言 parser、自动提取本地规范、可靠的任务切换检测和 30–50 个真实任务的重复实验。

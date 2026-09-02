@@ -28,6 +28,9 @@ export function buildReviewConfirmation(
   kind: ReviewConfirmation["kind"],
   approvedRepositories: string[],
   confirmedAt = new Date().toISOString(),
+  rationale = kind === "human"
+    ? "Human approved the rendered reference proposal after inspection."
+    : "Independent agent approved the evidence-bound reference proposal.",
 ): ReviewConfirmation {
   return {
     schemaVersion: 1,
@@ -37,6 +40,7 @@ export function buildReviewConfirmation(
     confirmer: confirmer.trim(),
     kind,
     approvedRepositories: [...new Set(approvedRepositories)].sort(),
+    rationale: rationale.trim(),
     confirmedAt,
   };
 }
@@ -56,10 +60,12 @@ export function applyReviewConfirmation(
   if (confirmation.taskFingerprint !== taskFingerprint) throw new Error("Review confirmation belongs to a different task");
   if (confirmation.reviewFingerprint !== fingerprintReviewSubmission(submission)) throw new Error("Review confirmation belongs to a different review submission");
   if (!confirmation.confirmer.trim()) throw new Error("Review confirmation requires a confirmer identity");
+  if (confirmation.rationale.trim().length < 12) throw new Error("Review confirmation requires a meaningful rationale");
   if (confirmation.confirmer.trim().toLowerCase() === submission.reviewer.trim().toLowerCase()) {
     throw new Error("Review confirmation must come from a different human or agent identity");
   }
   if (confirmation.kind !== "human" && confirmation.kind !== "independent-agent") throw new Error("Review confirmation kind is invalid");
+  if (Number.isNaN(Date.parse(confirmation.confirmedAt))) throw new Error("Review confirmation timestamp is invalid");
   const provisionallyApproved = new Set(provisional.results.filter((result) => result.approved).map((result) => result.repository));
   const confirmed = new Set(confirmation.approvedRepositories);
   if (confirmed.size === 0) throw new Error("Review confirmation must approve at least one repository");

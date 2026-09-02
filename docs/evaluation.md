@@ -5,7 +5,7 @@
 单元测试只能证明检索、门禁和适配器按规格运行，不能证明参考包提高了软件质量。本 runner 在相同本地 fixture、任务、模型、推理环境和验收命令下生成 paired runs：
 
 - `baseline`：一个 Pi coding call，不加载 Imitator；
-- `imitator`：proposal agent 检索和评审、隔离 Pi judge 确认、implementation agent 编码，共三个 model calls。
+- `imitator`：参考 proposal agent、独立参考 judge、Design Dossier 蒸馏 agent、独立 design judge、implementation agent，共最多五个 model calls。
 
 每个 run 使用 fixture 的独立副本，不复制 `.git`、`.imitator` 或 `node_modules`，并拒绝带 symlink 的 fixture，避免副本写出实验目录。
 
@@ -37,7 +37,15 @@ npm run eval:pi -- `
   --execute
 ```
 
-Runner 在产生任何付费调用前执行 Pi auth readiness check。`--judge-provider` 和 `--judge-model` 可省略，默认使用相同模型但独立进程和独立上下文；更强的独立性应使用不同模型或供应商。
+Runner 在产生任何付费调用前执行 Pi auth readiness check。`--judge-provider` 和 `--judge-model` 可省略，默认使用相同模型但独立进程和独立上下文；更强的独立性应使用不同模型或供应商。两个 judge 都要求结构化 JSON 和有内容的 rationale，且理由会进入持久确认记录。
+
+Imitator run 的五阶段顺序：
+
+1. proposal agent 只能检索、读取证据和提交参考决策；
+2. reference judge 只可从 provisional 集合中批准仓库；
+3. distillation agent 基于已批准证据和本地项目提交 Design Dossier，不得编码；
+4. design judge 核对证据忠实度、架构/规格/测试完整性、本地适配与 cargo-cult 风险；
+5. 两层状态都确认后，implementation agent 只获得抽象设计契约并执行原任务。
 
 执行模式会运行 suite 中的本地 `verify.command`，所以 `--execute` 只应用于你已经检查过的本地 suite。远程发现仓库永远不会被 clone 或执行。
 
@@ -45,7 +53,7 @@ Runner 在产生任何付费调用前执行 Pi auth readiness check。`--judge-p
 
 每次实验写入 `.imitator/eval/<suite>-<timestamp>/`：
 
-- 每个 run 的 agent/judge 输出、退出码、耗时、变更文件数和验收结果；
+- 每个 run 的五阶段 agent/judge 输出、退出码、耗时、变更文件数和验收结果；
 - `report.json` 中按 variant 汇总的 verification rate、平均耗时和平均变更文件数；
 - 每个 run 的隔离工作区，便于后续人工 review。
 

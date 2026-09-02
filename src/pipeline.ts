@@ -2,7 +2,9 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { GitHubClient } from "./github.ts";
 import { rankSearchCandidates } from "./discovery.ts";
-import type { GateResult, HarnessConfig, ReferencePack, RepositoryProfile, ReviewSubmission, TaskSpec } from "./types.ts";
+import type { DesignConfirmation, DesignGateResult, GateResult, HarnessConfig, ReferencePack, RepositoryProfile, ReviewSubmission, TaskSpec } from "./types.ts";
+import { renderAdaptationBrief, renderDesignAgentContext, renderDesignDossier } from "./design-render.ts";
+import { buildDesignDossierRequest, buildDesignDossierTemplate } from "./design.ts";
 import { planQueries } from "./query.ts";
 import { assessRepository } from "./score.ts";
 import { collectSlices, type SemanticSliceSelector } from "./slice.ts";
@@ -68,9 +70,49 @@ export async function writeGateResult(result: GateResult, submission: ReviewSubm
   await mkdir(directory, { recursive: true });
   await Promise.all([
     writeFile(resolve(directory, "gate-result.json"), `${JSON.stringify(result, null, 2)}\n`, "utf8"),
+    writeFile(resolve(directory, "REVIEW_SUBMISSION.json"), `${JSON.stringify(submission, null, 2)}\n`, "utf8"),
     writeFile(resolve(directory, "GATE_REPORT.md"), renderGateReport(result, submission.reviewer), "utf8"),
     writeFile(resolve(directory, "APPROVED_REFERENCE.md"), renderReference(result.approvedPack), "utf8"),
     writeFile(resolve(directory, "APPROVED_AGENT_CONTEXT.md"), renderAgentContext(result.approvedPack), "utf8"),
+  ]);
+  return directory;
+}
+
+export async function writeDesignRequest(referenceGate: GateResult, taskFingerprint: string, outputDirectory: string): Promise<string> {
+  const directory = resolve(outputDirectory);
+  await mkdir(directory, { recursive: true });
+  const request = buildDesignDossierRequest(referenceGate, taskFingerprint);
+  const template = buildDesignDossierTemplate(request);
+  await Promise.all([
+    writeFile(resolve(directory, "DESIGN_DOSSIER_REQUEST.json"), `${JSON.stringify(request, null, 2)}\n`, "utf8"),
+    writeFile(resolve(directory, "DESIGN_DOSSIER_TEMPLATE.json"), `${JSON.stringify(template, null, 2)}\n`, "utf8"),
+  ]);
+  return directory;
+}
+
+export async function writeDesignProposal(result: DesignGateResult, referenceGate: GateResult, outputDirectory: string): Promise<string> {
+  const directory = resolve(outputDirectory);
+  await mkdir(directory, { recursive: true });
+  await Promise.all([
+    writeFile(resolve(directory, "design-gate-result.json"), `${JSON.stringify(result, null, 2)}\n`, "utf8"),
+    writeFile(resolve(directory, "DESIGN_DOSSIER.json"), `${JSON.stringify(result.dossier, null, 2)}\n`, "utf8"),
+    writeFile(resolve(directory, "DESIGN_DOSSIER.md"), renderDesignDossier(result.dossier, referenceGate), "utf8"),
+    writeFile(resolve(directory, "ADAPTATION_BRIEF.md"), renderAdaptationBrief(result.dossier), "utf8"),
+  ]);
+  return directory;
+}
+
+export async function writeDesignResult(
+  result: DesignGateResult,
+  confirmation: DesignConfirmation,
+  referenceGate: GateResult,
+  outputDirectory: string,
+): Promise<string> {
+  const directory = resolve(outputDirectory);
+  await writeDesignProposal(result, referenceGate, directory);
+  await Promise.all([
+    writeFile(resolve(directory, "DESIGN_CONFIRMATION.json"), `${JSON.stringify(confirmation, null, 2)}\n`, "utf8"),
+    writeFile(resolve(directory, "APPROVED_AGENT_CONTEXT.md"), renderDesignAgentContext(result), "utf8"),
   ]);
   return directory;
 }

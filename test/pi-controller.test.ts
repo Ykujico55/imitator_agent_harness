@@ -6,10 +6,11 @@ import test from "node:test";
 import { DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
 import { applyReviewConfirmation } from "../src/confirmation.ts";
 import { defaultConfig } from "../src/config.ts";
+import { confirmDesignDossier, evaluateDesignDossier } from "../src/design.ts";
 import { applyReviewGate, fingerprintReferencePack } from "../src/review.ts";
 import { assessRepository } from "../src/score.ts";
 import { createTaskIdentity } from "../src/task.ts";
-import type { EvidenceSlice, ReferencePack, RepositoryReviewDecision } from "../src/types.ts";
+import type { DesignDossier, EvidenceSlice, ReferencePack, RepositoryReviewDecision } from "../src/types.ts";
 import { PiHarnessController, type PiHarnessRuntime, type PreparedRun } from "../integrations/pi/controller.ts";
 import { FilePiStateStore, inspectWorkspace, type PersistedPiPayload, type PiStateStore } from "../integrations/pi/state.ts";
 import { matureRepository } from "./helpers.ts";
@@ -55,6 +56,12 @@ function runtime(run: PreparedRun): PiHarnessRuntime {
     async confirm(current, submission, provisional, confirmation) {
       return applyReviewConfirmation(current.pack, current.taskIdentity.fingerprint, submission, provisional, confirmation);
     },
+    async evaluateDesign(current, referenceGate, dossier) {
+      return evaluateDesignDossier(dossier, referenceGate, current.taskIdentity.fingerprint);
+    },
+    async confirmDesign(_current, _submission, _referenceConfirmation, _referenceGate, result, confirmation) {
+      return confirmDesignDossier(result, confirmation);
+    },
   };
 }
 
@@ -79,6 +86,56 @@ function approvedDecision(): RepositoryReviewDecision {
   };
 }
 
+function approvedDesign(run: PreparedRun): DesignDossier {
+  return {
+    schemaVersion: 1,
+    taskFingerprint: run.taskIdentity.fingerprint,
+    referencePackFingerprint: fingerprintReferencePack(run.pack),
+    author: "pi-design-agent",
+    repositories: ["example/coding-agent"],
+    systemIntent: "Keep hook registration provider-neutral and behaviorally specified before execution.",
+    localContext: {
+      constraints: ["The core must remain provider-neutral and dependency-free."],
+      existingConventions: ["The project uses injected interfaces and deterministic output."],
+      qualityAttributes: ["Extensibility must preserve fail-closed behavior."],
+    },
+    principles: [{
+      id: "principle_registry", title: "Separate registration from execution",
+      problem: "Registration concerns otherwise leak into provider-specific runtime execution.", constraints: ["Providers expose different payload types."],
+      decision: "Keep descriptors provider-neutral behind a narrow registry contract.", mechanisms: ["Store descriptors separately from executors."],
+      tradeoffs: ["An adapter layer adds code while containing provider coupling."], nonGoals: ["Do not copy upstream provider types."],
+      fitsWhen: ["Several providers share lifecycle concepts."], failsWhen: ["One fixed provider owns the complete runtime."],
+      evidenceSliceIds: ["approved-slice"],
+    }],
+    architecture: [{
+      id: "architecture_registry", name: "Hook registry", responsibility: "Own descriptors without invoking provider behavior.",
+      collaborators: ["Executor"], invariants: ["Registration never invokes hooks."], failureModes: ["Duplicate names fail before execution."],
+      extensionPoints: ["Descriptor validation"], evidenceSliceIds: ["approved-slice"],
+    }],
+    specifications: [{
+      id: "spec_registry", subject: "Registration and lookup behavior contract.", preconditions: ["Name is non-empty."],
+      postconditions: ["Registered descriptors are retrievable."], invariants: ["Descriptors remain provider-neutral."],
+      errorSemantics: ["Duplicate names fail deterministically."], evidenceSliceIds: ["approved-slice"],
+    }],
+    testConcepts: [{
+      id: "test_registry", behavior: "Registration changes lookup without invoking hooks.", layer: "contract",
+      oracle: "A hook spy remains untouched after registration.", setup: ["Use a provider-neutral hook spy."],
+      failureCases: ["Duplicate registration reports the documented error."], evidenceSliceIds: ["approved-slice"],
+    }],
+    negativeSpace: [{
+      choice: "Avoid a universal provider configuration abstraction.",
+      rationale: "Provider-specific options would erase the intended core boundary.", evidenceSliceIds: ["approved-slice"],
+    }],
+    localMappings: [{
+      localConcern: "Add a local hook registry without provider coupling.",
+      referenceConceptIds: ["principle_registry", "architecture_registry", "spec_registry", "test_registry"], decision: "adapt",
+      rationale: "The boundary transfers while local lifecycle names differ.", adaptations: ["Translate names to local lifecycle events."],
+      targetPaths: ["src/hooks/registry.ts"], acceptanceTests: ["Registration never invokes hooks and duplicates fail."],
+    }],
+    globalRisks: ["Provider payload types could still leak through descriptors."],
+  };
+}
+
 test("Pi controller enforces prepare-review-approve before mutation", async () => {
   const run = preparedRun();
   const controller = new PiHarnessController(runtime(run), 6, new MemoryStateStore());
@@ -96,11 +153,18 @@ test("Pi controller enforces prepare-review-approve before mutation", async () =
   assert.equal(controller.status().phase, "awaiting_confirmation");
   assert.match(controller.mutationBlockReason("write")!, /confirmation/);
   await controller.confirmReview("human-test", "human");
+  assert.equal(controller.status().phase, "distilling");
+  assert.match(controller.mutationBlockReason("write")!, /design dossier/i);
+  await assert.rejects(() => controller.getEvidence(["uncited-slice"]), /not approved/);
+  const design = await controller.submitDesignDossier(approvedDesign(run));
+  assert.equal(design.approved, true, design.reasons.join("\n"));
+  assert.equal(controller.status().phase, "awaiting_design_confirmation");
+  await controller.confirmDesign("human-designer", "human");
   assert.equal(controller.status().phase, "approved");
   assert.equal(controller.mutationBlockReason("write"), undefined);
-  assert.match(controller.systemContext(), /Separate hook registration/);
-  assert.match(controller.systemContext(), /approved-slice/);
-  await assert.rejects(() => controller.getEvidence(["uncited-slice"]), /not approved/);
+  assert.match(controller.systemContext(), /Separate registration from execution/);
+  assert.doesNotMatch(controller.systemContext(), /approved-slice/);
+  await assert.rejects(() => controller.getEvidence(["approved-slice"]), /closed after design approval/);
   await controller.reset();
   assert.match(controller.mutationBlockReason("apply_patch")!, /imitator_prepare/);
 });
@@ -131,6 +195,16 @@ test("Pi state survives restart and rejects an integrity-modified state file", a
   assert.equal(restored.status().phase, "awaiting_confirmation");
   await restored.confirmReview("human-test", "human");
 
+  const distilling = new PiHarnessController(runtime(run), 6, store);
+  assert.equal(await distilling.restore(cwd), true);
+  assert.equal(distilling.status().phase, "distilling");
+  await distilling.submitDesignDossier(approvedDesign(run));
+
+  const designWaiting = new PiHarnessController(runtime(run), 6, store);
+  assert.equal(await designWaiting.restore(cwd), true);
+  assert.equal(designWaiting.status().phase, "awaiting_design_confirmation");
+  await designWaiting.confirmDesign("human-designer", "human");
+
   const approved = new PiHarnessController(runtime(run), 6, store);
   assert.equal(await approved.restore(cwd), true);
   assert.equal(approved.mutationBlockReason("edit"), undefined);
@@ -140,6 +214,35 @@ test("Pi state survives restart and rejects an integrity-modified state file", a
   await writeFile(statePath, state.replace('"phase": "approved"', '"phase": "reviewing"'), "utf8");
   const rejected = new PiHarnessController(runtime(run), 6, store);
   await assert.rejects(() => rejected.restore(cwd), /integrity check/);
+});
+
+test("starting a replacement prepare clears stale persisted approval before remote work", async () => {
+  const run = preparedRun();
+  const store = new MemoryStateStore();
+  const first = new PiHarnessController(runtime(run), 6, store);
+  await first.prepare(run.pack.task, "C:/workspace");
+  assert.equal(store.state?.phase, "reviewing");
+  const failingRuntime: PiHarnessRuntime = {
+    ...runtime(run),
+    async prepare() { throw new Error("network unavailable"); },
+  };
+  const replacement = new PiHarnessController(failingRuntime, 6, store);
+  await assert.rejects(() => replacement.prepare({ task: "replacement task" }, "C:/workspace"), /network unavailable/);
+  assert.equal(store.state, undefined);
+  assert.equal(replacement.status().phase, "idle");
+});
+
+test("prepare fails closed when stale state cannot be cleared", async () => {
+  const run = preparedRun();
+  const brokenStore: PiStateStore = {
+    async load() { return undefined; },
+    async save() {},
+    async clear() { throw new Error("state is read-only"); },
+  };
+  const controller = new PiHarnessController(runtime(run), 6, brokenStore);
+  await assert.rejects(() => controller.prepare(run.pack.task, "C:/workspace"), /state is read-only/);
+  assert.equal(controller.status().phase, "idle");
+  assert.match(controller.mutationBlockReason("write")!, /imitator_prepare/);
 });
 
 test("current Pi loader discovers the declared extension tools, commands, and gates", async (t) => {
@@ -159,7 +262,7 @@ test("current Pi loader discovers the declared extension tools, commands, and ga
   assert.deepEqual(loaded.errors, []);
   assert.equal(loaded.extensions.length, 1);
   const extension = loaded.extensions[0]!;
-  assert.deepEqual([...extension.tools.keys()].sort(), ["imitator_get_evidence", "imitator_prepare", "imitator_submit_review"]);
+  assert.deepEqual([...extension.tools.keys()].sort(), ["imitator_get_evidence", "imitator_prepare", "imitator_submit_design_dossier", "imitator_submit_review"]);
   assert.deepEqual([...extension.commands.keys()].sort(), ["imitator-confirm", "imitator-prepare", "imitator-reset", "imitator-status"]);
   assert.ok(extension.handlers.has("before_agent_start"));
   assert.ok(extension.handlers.has("tool_call"));

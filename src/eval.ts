@@ -45,6 +45,57 @@ function record(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+export function extractLastJsonObject(output: string): Record<string, unknown> {
+  let start = -1;
+  let depth = 0;
+  let quoted = false;
+  let escaped = false;
+  let last: Record<string, unknown> | undefined;
+  for (let index = 0; index < output.length; index += 1) {
+    const character = output[index]!;
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') quoted = false;
+      continue;
+    }
+    if (character === '"' && depth > 0) { quoted = true; continue; }
+    if (character === "{") {
+      if (depth === 0) start = index;
+      depth += 1;
+    } else if (character === "}" && depth > 0) {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        try { last = record(JSON.parse(output.slice(start, index + 1)), "judge output"); } catch { /* keep scanning */ }
+        start = -1;
+      }
+    }
+  }
+  if (!last) throw new Error("Independent judge did not return a valid JSON object");
+  return last;
+}
+
+export function parseReferenceJudgeDecision(output: string, allowed: string[]): { approvedRepositories: string[]; rationale: string } {
+  const value = extractLastJsonObject(output);
+  if (!Array.isArray(value.approvedRepositories) || value.approvedRepositories.some((name) => typeof name !== "string")) {
+    throw new Error("Independent judge returned invalid approvedRepositories");
+  }
+  if (typeof value.rationale !== "string" || value.rationale.trim().length < 12) throw new Error("Independent judge rationale is missing or too vague");
+  const approvedRepositories = [...new Set(value.approvedRepositories as string[])];
+  const allowedSet = new Set(allowed);
+  if (approvedRepositories.some((repository) => !allowedSet.has(repository))) {
+    throw new Error("Independent judge approved a repository outside the provisional set");
+  }
+  return { approvedRepositories, rationale: value.rationale.trim() };
+}
+
+export function parseDesignJudgeDecision(output: string): { approve: boolean; rationale: string } {
+  const value = extractLastJsonObject(output);
+  if (typeof value.approve !== "boolean") throw new Error("Independent design judge returned an invalid approve decision");
+  if (typeof value.rationale !== "string" || value.rationale.trim().length < 12) throw new Error("Independent design judge rationale is missing or too vague");
+  return { approve: value.approve, rationale: value.rationale.trim() };
+}
+
 export function parseEvalSuite(value: unknown): EvalSuite {
   const root = record(value, "eval suite");
   if (root.schemaVersion !== 1) throw new Error("eval suite schemaVersion must be 1");

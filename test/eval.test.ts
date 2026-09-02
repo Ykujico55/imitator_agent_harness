@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildEvalPlan, parseEvalSuite, summarizeEvalResults, type EvalRunResult } from "../src/eval.ts";
+import { buildEvalPlan, extractLastJsonObject, parseDesignJudgeDecision, parseEvalSuite, parseReferenceJudgeDecision, summarizeEvalResults, type EvalRunResult } from "../src/eval.ts";
 
 test("builds a deterministic paired A/B plan", () => {
   const suite = parseEvalSuite({
@@ -39,4 +39,15 @@ test("summarizes verification rate without claiming semantic quality", () => {
 
 test("rejects executable suites with malformed verification commands", () => {
   assert.throws(() => parseEvalSuite({ schemaVersion: 1, name: "bad", repetitions: 1, tasks: [{ id: "x", fixture: "x", prompt: "x", verify: { command: "", args: "npm test" } }] }), /verify.command/);
+});
+
+test("extracts and validates the last structured independent-judge decision", () => {
+  const output = 'log {not json}\nfinal {"approvedRepositories":["example/repo"],"rationale":"Evidence and license support adaptation."}\n';
+  assert.deepEqual(extractLastJsonObject(output).approvedRepositories, ["example/repo"]);
+  assert.deepEqual(parseReferenceJudgeDecision(output, ["example/repo"]).approvedRepositories, ["example/repo"]);
+  assert.throws(() => parseReferenceJudgeDecision(output, ["other/repo"]), /outside the provisional set/);
+  assert.deepEqual(parseDesignJudgeDecision('{"approve":true,"rationale":"The mappings are evidence-bound and testable."}'), {
+    approve: true,
+    rationale: "The mappings are evidence-bound and testable.",
+  });
 });

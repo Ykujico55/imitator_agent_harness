@@ -173,5 +173,132 @@ export type ReviewConfirmation = {
   confirmer: string;
   kind: "human" | "independent-agent";
   approvedRepositories: string[];
+  rationale: string;
+  confirmedAt: string;
+};
+
+export type DesignDecision = "adopt" | "adapt" | "reject";
+export type TestLayer = "unit" | "integration" | "contract" | "property" | "end-to-end";
+
+export type DesignPrinciple = {
+  id: string;
+  title: string;
+  problem: string;
+  constraints: string[];
+  decision: string;
+  mechanisms: string[];
+  tradeoffs: string[];
+  nonGoals: string[];
+  fitsWhen: string[];
+  failsWhen: string[];
+  evidenceSliceIds: string[];
+};
+
+export type ArchitectureConcept = {
+  id: string;
+  name: string;
+  responsibility: string;
+  collaborators: string[];
+  invariants: string[];
+  failureModes: string[];
+  extensionPoints: string[];
+  evidenceSliceIds: string[];
+};
+
+export type SpecificationConcept = {
+  id: string;
+  subject: string;
+  preconditions: string[];
+  postconditions: string[];
+  invariants: string[];
+  errorSemantics: string[];
+  evidenceSliceIds: string[];
+};
+
+export type TestConcept = {
+  id: string;
+  behavior: string;
+  layer: TestLayer;
+  oracle: string;
+  setup: string[];
+  failureCases: string[];
+  evidenceSliceIds: string[];
+};
+
+export type LocalDesignMapping = {
+  localConcern: string;
+  referenceConceptIds: string[];
+  decision: DesignDecision;
+  rationale: string;
+  adaptations: string[];
+  targetPaths: string[];
+  acceptanceTests: string[];
+};
+
+export type DesignDossier = {
+  schemaVersion: 1;
+  taskFingerprint: string;
+  referencePackFingerprint: string;
+  author: string;
+  repositories: string[];
+  systemIntent: string;
+  localContext: {
+    constraints: string[];
+    existingConventions: string[];
+    qualityAttributes: string[];
+  };
+  principles: DesignPrinciple[];
+  architecture: ArchitectureConcept[];
+  specifications: SpecificationConcept[];
+  testConcepts: TestConcept[];
+  negativeSpace: Array<{
+    choice: string;
+    rationale: string;
+    evidenceSliceIds: string[];
+  }>;
+  localMappings: LocalDesignMapping[];
+  globalRisks: string[];
+};
+
+export type DesignDossierRequest = {
+  schemaVersion: 1;
+  taskFingerprint: string;
+  referencePackFingerprint: string;
+  task: TaskSpec;
+  repositories: Array<{
+    name: string;
+    license: string | null;
+    revision: string;
+  }>;
+  evidenceIndex: Array<{
+    id: string;
+    repository: string;
+    path: string;
+    lines: string;
+    reason: string;
+    sourceUrl: string;
+    license: string | null;
+  }>;
+  requirements: string[];
+};
+
+export type DesignGateResult = {
+  schemaVersion: 1;
+  dossierFingerprint: string;
+  generatedAt: string;
+  approved: boolean;
+  reasons: string[];
+  evidenceSliceIds: string[];
+  dossier: DesignDossier;
+};
+
+export type DesignConfirmation = {
+  schemaVersion: 1;
+  dossierFingerprint: string;
+  taskFingerprint: string;
+  referencePackFingerprint: string;
+  confirmer: string;
+  kind: "human" | "independent-agent";
+  rationale: string;
   confirmedAt: string;
 };

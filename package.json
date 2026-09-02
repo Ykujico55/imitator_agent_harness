@@ -1,14 +1,16 @@
 {
   "name": "imitator-agent-harness",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
-  "description": "Evidence-first GitHub precedent discovery for coding agents.",
+  "description": "Evidence-bound design-taste distillation and dual confirmation for coding agents.",
   "keywords": [
     "pi-package",
     "coding-agent",
     "github",
-    "precedent"
+    "precedent",
+    "design-dossier",
+    "architecture"
   ],
   "pi": {
     "extensions": [
