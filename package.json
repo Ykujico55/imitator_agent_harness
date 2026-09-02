@@ -1,6 +1,6 @@
 {
   "name": "imitator-agent-harness",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "Evidence-first GitHub precedent discovery for coding agents.",
@@ -20,6 +20,7 @@
   },
   "scripts": {
     "imitator:prepare": "node src/cli.ts prepare",
+    "eval:pi": "node eval/pi-runner.ts",
     "test": "node --test test/*.test.ts",
     "check": "npm test && tsc --noEmit && node src/cli.ts help"
   },
@@ -29,12 +30,13 @@
   "license": "MIT",
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "^0.84.4",
-    "typebox": "^1.3.25"
+    "typebox": "^1.3.25",
+    "typescript": "^5.9.3"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.84.4",
     "@types/node": "^26.4.0",
     "typebox": "^1.3.25",
-    "typescript": "^7.0.2"
+    "typescript": "^5.9.3"
   }
 }

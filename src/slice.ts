@@ -3,6 +3,22 @@ import type { EvidenceSlice, HarnessConfig, RepositoryAssessment, TaskSpec, Tree
 import type { GitHubClient } from "./github.ts";
 import { taskTerms } from "./query.ts";
 
+export type SliceWindow = {
+  start: number;
+  end: number;
+  content: string;
+  relevance: number;
+  strategy: "line-window" | "typescript-ast";
+  symbols?: string[];
+};
+
+export type SemanticSliceSelector = (input: {
+  path: string;
+  content: string;
+  terms: string[];
+  maxLines: number;
+}) => SliceWindow | undefined;
+
 const EXCLUDED = /(^|\/)(node_modules|vendor|dist|build|coverage|fixtures?|snapshots?|generated|\.vscode|\.idea|\.agents)(\/|$)|(^|\/)(AGENTS|CLAUDE)\.md$|^\.github\/(copilot-instructions|instructions)(\/|\.|$)|\.(lock|min\.(js|css)|map|png|jpe?g|gif|pdf|zip|wasm)$|\.i18n\.ya?ml$/i;
 const TEXT_FILE = /(^|\/)(README|ARCHITECTURE|DESIGN|CONTRIBUTING|SECURITY)(\.[^/]*)?$|\.(md|mdx|ts|tsx|js|jsx|py|rs|go|java|kt|rb|toml|ya?ml|json)$/i;
 const DESIGN_PATH = /(^|\/)(architecture|design|adr)(\/|\.|$)|(^|\/)(rfcs?)(\/|$)|(^|\/)(RFC-\d+|ADR-\d+)[^/]*\.md$/i;
@@ -71,9 +87,9 @@ function diversifyPaths(
   return selected;
 }
 
-function bestWindow(content: string, terms: string[], maxLines: number): { start: number; end: number; content: string; relevance: number } {
+export function selectLineWindow(content: string, terms: string[], maxLines: number): SliceWindow {
   const lines = content.replace(/\r\n/g, "\n").split("\n");
-  if (lines.length <= maxLines) return { start: 1, end: lines.length, content: lines.join("\n"), relevance: 1 };
+  if (lines.length <= maxLines) return { start: 1, end: lines.length, content: lines.join("\n"), relevance: 1, strategy: "line-window" };
   let bestStart = 0;
   let bestScore = -1;
   for (let start = 0; start < lines.length; start += Math.max(10, Math.floor(maxLines / 2))) {
@@ -84,10 +100,16 @@ function bestWindow(content: string, terms: string[], maxLines: number): { start
     if (score > bestScore) { bestScore = score; bestStart = start; }
   }
   const selected = lines.slice(bestStart, bestStart + maxLines);
-  return { start: bestStart + 1, end: bestStart + selected.length, content: selected.join("\n"), relevance: bestScore };
+  return { start: bestStart + 1, end: bestStart + selected.length, content: selected.join("\n"), relevance: bestScore, strategy: "line-window" };
 }
 
-export async function collectSlices(client: GitHubClient, assessments: RepositoryAssessment[], task: TaskSpec, config: HarnessConfig): Promise<EvidenceSlice[]> {
+export async function collectSlices(
+  client: GitHubClient,
+  assessments: RepositoryAssessment[],
+  task: TaskSpec,
+  config: HarnessConfig,
+  semanticSelector?: SemanticSliceSelector,
+): Promise<EvidenceSlice[]> {
   const terms = taskTerms(task);
   const slices: EvidenceSlice[] = [];
   let characters = 0;
@@ -99,9 +121,21 @@ export async function collectSlices(client: GitHubClient, assessments: Repositor
       try {
         const text = await client.readTextFile(repo.fullName, candidate.entry.path, repo.resolvedRevision);
         if (text.includes("\0")) continue;
-        const window = bestWindow(text, terms, config.slicing.maxLinesPerSlice);
+        let semanticWindow: SliceWindow | undefined;
+        try {
+          semanticWindow = semanticSelector?.({
+            path: candidate.entry.path,
+            content: text,
+            terms,
+            maxLines: config.slicing.maxLinesPerSlice,
+          });
+        } catch {
+          // Parser errors must degrade to the deterministic dependency-free window.
+        }
+        const window = semanticWindow ?? selectLineWindow(text, terms, config.slicing.maxLinesPerSlice);
         const remaining = config.slicing.maxTotalCharacters - characters;
         if (remaining < 200) return slices;
+        if (window.strategy === "typescript-ast" && window.content.length > remaining) return slices;
         const content = window.content.slice(0, remaining);
         characters += content.length;
         const id = createHash("sha256")
@@ -119,8 +153,10 @@ export async function collectSlices(client: GitHubClient, assessments: Repositor
           endLine: window.end,
           sourceUrl: `${repo.htmlUrl}/blob/${encodeURIComponent(repo.resolvedRevision)}/${candidate.entry.path.split("/").map(encodeURIComponent).join("/")}#L${window.start}-L${window.end}`,
           relevance: Math.round(candidate.score + window.relevance),
-          reason: candidate.reason,
+          reason: window.symbols?.length ? `${candidate.reason}; semantic symbols ${window.symbols.join(", ")}` : candidate.reason,
           content,
+          strategy: window.strategy,
+          symbols: window.symbols,
         });
       } catch {
         // A single unreadable, moved, or oversized file must not fail the reference run.

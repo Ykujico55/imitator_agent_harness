@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { selectTypeScriptAstWindow } from "../integrations/typescript-ast.ts";
 import { defaultConfig } from "../src/config.ts";
 import { rankPaths, collectSlices } from "../src/slice.ts";
 import { assessRepository } from "../src/score.ts";
@@ -66,4 +67,39 @@ test("scales category quotas to use a larger per-repository evidence budget", as
   assert.ok(new Set(slices.map((slice) => slice.path)).size === 12);
   assert.ok(slices.some((slice) => slice.path.startsWith("src/features/")));
   assert.ok(slices.some((slice) => slice.path.startsWith("test/")));
+});
+
+test("TypeScript AST slicing returns a complete task-relevant declaration", () => {
+  const content = [
+    "const unrelated = 1;",
+    "",
+    "export interface ExtensionRegistry {",
+    "  register(name: string): void;",
+    "  resolve(name: string): unknown;",
+    "}",
+    "",
+    "export function createExtensionRegistry(): ExtensionRegistry {",
+    "  return { register() {}, resolve() { return undefined; } };",
+    "}",
+    "",
+    "export function unrelatedUtility(): number {",
+    "  return 42;",
+    "}",
+  ].join("\n");
+  const selected = selectTypeScriptAstWindow({
+    path: "src/extensions.ts",
+    content,
+    terms: ["extension", "registry"],
+    maxLines: 8,
+  });
+  assert.equal(selected?.strategy, "typescript-ast");
+  assert.deepEqual(selected?.symbols, ["ExtensionRegistry"]);
+  assert.equal(selected?.start, 3);
+  assert.equal(selected?.end, 6);
+  assert.match(selected?.content ?? "", /^export interface ExtensionRegistry/);
+  assert.doesNotMatch(selected?.content ?? "", /unrelatedUtility/);
+});
+
+test("TypeScript AST slicing declines unsupported languages for deterministic fallback", () => {
+  assert.equal(selectTypeScriptAstWindow({ path: "main.py", content: "def run():\n  pass", terms: ["run"], maxLines: 20 }), undefined);
 });

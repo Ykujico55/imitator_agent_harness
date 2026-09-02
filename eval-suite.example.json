@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "name": "small-coding-ab",
+  "repetitions": 1,
+  "tasks": [
+    {
+      "id": "retry-queue",
+      "fixture": "./eval-fixtures/retry-queue",
+      "prompt": "Extend JobQueue with bounded retries. Keep the existing constructor handler API, add options for maxAttempts (default 3), backoff(attempt), and injected sleep(ms). Retry rejected handlers until success, return immediately after success, and rethrow the final error after maxAttempts. Validate invalid maxAttempts. Do not add runtime dependencies. Run the tests.",
+      "verify": {
+        "command": "npm",
+        "args": ["test"]
+      },
+      "timeoutMs": 600000
+    }
+  ]
+}

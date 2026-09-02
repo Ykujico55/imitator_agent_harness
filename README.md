@@ -23,6 +23,10 @@
 - gate 只输出明确批准且被引用的切片，未评审推断不会进入最终 agent 上下文。
 - 提供 Pi extension：自动注入工作协议，在 precedent 二阶段评审通过前拦截 `edit`、`write`、`bash`、`powershell` 和 `apply_patch`。
 - Pi 通过三个渐进式工具完成搜索、按 ID 读取最多 6 个证据切片、提交结构化评审；不会把整份参考包直接塞进会话。
+- 任务指纹绑定规范化任务、工作区路径和 prepare 时的 Git HEAD；Pi 状态带完整性校验持久化到 `.imitator/pi-state.json`，重启可恢复，基线变化则 fail closed。
+- Coding agent 的评审只是 proposal；必须由 `/imitator-confirm` 的交互式人工确认，或隔离的独立 judge 身份确认后才能解锁。
+- Pi 对 TypeScript/JavaScript 使用 compiler AST 选择完整接口、类型、类、函数或测试单元；其他语言确定性回退到行窗口。
+- 提供默认不执行的真实模型 paired A/B eval runner，对比 baseline 与 Imitator + 独立 judge，并记录验收通过率、耗时和变更文件数。
 - 不 clone、不安装、不构建、不执行上游内容；远程文本永远按不可信数据处理。
 - provider-neutral 核心零运行时依赖，Node.js 22.18+ 可直接运行 TypeScript；Pi 与 TypeBox 只作为扩展宿主 peer 和开发期兼容性测试依赖。
 
@@ -61,9 +65,10 @@ pi install git:github.com/kunjinkao55/imitator_agent_harness
 
 1. `imitator_prepare`：为当前任务检索、评分和切片；
 2. `imitator_get_evidence`：只读取当前决策所需的少量切片；
-3. `imitator_submit_review`：提交带证据 ID 的 adopt/adapt/reject 决策。
+3. `imitator_submit_review`：提交带证据 ID 的 adopt/adapt/reject proposal；
+4. 人在 Pi 中执行 `/imitator-confirm`，检查弹窗中的任务指纹和仓库后确认。
 
-至少一个仓库通过确定性二阶段 gate 后，Pi 的修改与命令工具才会解锁。可用 `/imitator-status` 查看状态，开始新任务前用 `/imitator-reset` 重新上锁；也可用 `/imitator-prepare <任务>` 手动开始检索。
+至少一个仓库同时通过确定性 gate 和独立确认后，Pi 的修改与命令工具才会解锁。可用 `/imitator-status` 查看状态，开始新任务前用 `/imitator-reset` 重新上锁；也可用 `/imitator-prepare <任务>` 手动开始检索。
 
 本地开发时无需安装 package：
 
@@ -73,6 +78,16 @@ npx pi -e ./integrations/pi/index.ts
 ```
 
 更完整的操作步骤、安全边界和测试方式见 [Pi 接入说明](docs/pi-integration.md)。Pi 扩展机制和 package 安装方式以 [Pi Extensions](https://pi.dev/docs/latest/extensions) 与 [Pi Packages](https://pi.dev/docs/latest/packages) 为准。
+
+## 真实模型 A/B eval
+
+仓库自带一个无运行时依赖的 retry-queue 小型失败 fixture；也可以复制并修改 `eval-suite.example.json`，指向自己的本地、可复制、带确定性验收命令的小项目。默认命令只打印计划，不调用模型或执行测试：
+
+```powershell
+npm run eval:pi -- --suite eval-suite.example.json --provider <provider> --model <model>
+```
+
+确认计划、预计调用数、模型认证和本地验收命令后，才显式加入 `--execute`。Imitator 组每次使用 proposal agent、隔离 judge、implementation agent 三次调用，baseline 使用一次调用。完整协议见 [真实模型评估说明](docs/evaluation.md)。
 
 可复制示例配置：
 
@@ -97,4 +112,4 @@ Pi 只是一层薄适配器：“参考发现”和 deterministic gate 仍是可
 
 ## 当前边界与后续演进
 
-见 [架构与路线图](docs/architecture.md)。当前已经实现 provider-neutral 的结构化二阶段协议和 Pi 薄适配器，但不内置任何模型调用；评审质量仍取决于执行评审的人或 agent。后续重点是 GitHub App 权限模型、语义切片/去重、项目本地规范匹配、跨会话状态，以及真实任务 A/B eval。
+见 [架构与路线图](docs/architecture.md)。当前已经实现 provider-neutral 的结构化协议、Pi 持久门禁、人工/独立 judge 确认、TS/JS AST 切片和可执行的 paired A/B eval。尚未产生真实模型实验数据；后续重点是更多语言 parser、项目本地规范匹配、任务切换检测和 30–50 个真实任务的重复实验。

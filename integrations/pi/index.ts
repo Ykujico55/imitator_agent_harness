@@ -22,6 +22,12 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
   const controller = new PiHarnessController();
 
   pi.on("session_start", async (_event, ctx) => {
+    try {
+      await controller.restore(ctx.cwd);
+    } catch (error) {
+      await controller.reset(ctx.cwd);
+      ctx.ui.notify(`Imitator state was rejected: ${error instanceof Error ? error.message : String(error)}`, "warning");
+    }
     setStatus(ctx, controller);
   });
 
@@ -85,7 +91,7 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
       sliceIds: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, maxItems: 6 }),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const evidence = controller.getEvidence(params.sliceIds);
+      const evidence = await controller.getEvidence(params.sliceIds);
       setStatus(ctx, controller);
       const text = evidence.map((slice) => [
         `[BEGIN UNTRUSTED EVIDENCE ${slice.id}]`,
@@ -128,7 +134,10 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
       const result = await controller.submitReview(params.reviewer, decisions);
       setStatus(ctx, controller);
       return {
-        content: [{ type: "text", text: `Second-stage gate complete.\n\n${json({ results: result.results, approved: controller.status() })}` }],
+        content: [{
+          type: "text",
+          text: `Review proposal evaluated. Passing repositories still require independent human confirmation with /imitator-confirm before coding.\n\n${json({ results: result.results, status: controller.status() })}`,
+        }],
         details: result,
       };
     },
@@ -159,10 +168,37 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
     },
   });
 
+  pi.registerCommand("imitator-confirm", {
+    description: "Human-confirm the repositories that passed the provisional review",
+    handler: async (_args, ctx) => {
+      const repositories = controller.provisionalRepositories();
+      if (!repositories.length || controller.status().phase !== "awaiting_confirmation") {
+        ctx.ui.notify("No provisional review is waiting for confirmation.", "warning");
+        return;
+      }
+      const confirmed = await ctx.ui.confirm(
+        "Confirm precedent review",
+        `Approve these precedents for task ${controller.status().taskFingerprint?.slice(0, 12)}?\n\n${repositories.join("\n")}\n\nThis unlocks mutation tools for the bound task.`,
+      );
+      if (!confirmed) {
+        ctx.ui.notify("Review remains unconfirmed; mutation tools stay locked.", "warning");
+        return;
+      }
+      try {
+        await controller.confirmReview("human@pi-interactive", "human", repositories);
+        setStatus(ctx, controller);
+        ctx.ui.notify(`Confirmed ${repositories.length} precedent repositories.`, "info");
+      } catch (error) {
+        setStatus(ctx, controller);
+        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+      }
+    },
+  });
+
   pi.registerCommand("imitator-reset", {
     description: "Reset precedent state and lock mutation tools for a new task",
     handler: async (_args, ctx) => {
-      controller.reset();
+      await controller.reset(ctx.cwd);
       setStatus(ctx, controller);
       ctx.ui.notify("Imitator state reset. Mutation tools are locked until a new precedent passes review.", "info");
     },

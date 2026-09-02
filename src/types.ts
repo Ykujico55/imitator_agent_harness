@@ -7,6 +7,14 @@ export type TaskSpec = {
   avoid?: string[];
 };
 
+export type TaskIdentity = {
+  schemaVersion: 1;
+  fingerprint: string;
+  workspace: string;
+  baseRevision: string;
+  task: TaskSpec;
+};
+
 export type TreeEntry = {
   path: string;
   type: "blob" | "tree";
@@ -67,6 +75,8 @@ export type EvidenceSlice = {
   relevance: number;
   reason: string;
   content: string;
+  strategy?: "line-window" | "typescript-ast";
+  symbols?: string[];
 };
 
 export type HarnessConfig = {
@@ -153,4 +163,15 @@ export type GateResult = {
     decision?: RepositoryReviewDecision;
   }>;
   approvedPack: ReferencePack;
+};
+
+export type ReviewConfirmation = {
+  schemaVersion: 1;
+  referencePackFingerprint: string;
+  taskFingerprint: string;
+  reviewFingerprint: string;
+  confirmer: string;
+  kind: "human" | "independent-agent";
+  approvedRepositories: string[];
+  confirmedAt: string;
 };

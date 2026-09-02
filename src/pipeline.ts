@@ -5,7 +5,7 @@ import { rankSearchCandidates } from "./discovery.ts";
 import type { GateResult, HarnessConfig, ReferencePack, RepositoryProfile, ReviewSubmission, TaskSpec } from "./types.ts";
 import { planQueries } from "./query.ts";
 import { assessRepository } from "./score.ts";
-import { collectSlices } from "./slice.ts";
+import { collectSlices, type SemanticSliceSelector } from "./slice.ts";
 import { inferPractices, renderAgentContext, renderReference } from "./render.ts";
 import { buildReviewRequest, buildReviewTemplate, renderGateReport } from "./review.ts";
 
@@ -22,7 +22,12 @@ async function mapLimited<T, R>(items: T[], concurrency: number, fn: (item: T) =
   return results;
 }
 
-export async function prepareReferencePack(client: GitHubClient, task: TaskSpec, config: HarnessConfig): Promise<ReferencePack> {
+export async function prepareReferencePack(
+  client: GitHubClient,
+  task: TaskSpec,
+  config: HarnessConfig,
+  options: { semanticSelector?: SemanticSliceSelector } = {},
+): Promise<ReferencePack> {
   const queries = planQueries(task, config);
   if (!queries.length) throw new Error("Could not derive a GitHub query; pass --query explicitly.");
   const batches = await mapLimited(queries, 3, (query) => client.searchRepositories(query, config.github.candidateLimit));
@@ -33,7 +38,7 @@ export async function prepareReferencePack(client: GitHubClient, task: TaskSpec,
   const assessments = profileResults.filter((profile): profile is RepositoryProfile => profile !== null)
     .map((profile) => assessRepository(profile, task, config))
     .sort((a, b) => Number(b.accepted) - Number(a.accepted) || b.overall - a.overall || a.repository.fullName.localeCompare(b.repository.fullName));
-  const slices = await collectSlices(client, assessments, task, config);
+  const slices = await collectSlices(client, assessments, task, config, options.semanticSelector);
   return {
     schemaVersion: 2,
     generatedAt: new Date().toISOString(),

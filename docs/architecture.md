@@ -12,7 +12,7 @@
 4. Slicer 先按路径语义选择文件，再从长文件中选一个固定大小窗口；预算在字符层硬截止。
 5. Renderer 生成机器可读 manifest、证据文档、防提示注入的 agent 工作协议和 pack-bound 评审请求。
 6. 人或外部 judge 提交结构化决策；deterministic gate 校验 fingerprint、证据 ID、置信度、风险和审查完整性。
-7. 只有通过二阶段 gate 且被显式引用的切片才能进入 approved agent context。
+7. Proposal 通过 deterministic gate 后仍进入 `awaiting_confirmation`；只有不同身份的人或独立 agent 确认的仓库与引用切片才能进入 approved agent context。
 
 ## 威胁模型
 
@@ -40,10 +40,16 @@
 - `tool_call`：二阶段 gate 通过前拦截 Pi 的修改和命令工具；
 - `imitator_prepare`：调用 provider-neutral 核心并返回候选摘要与切片索引；
 - `imitator_get_evidence`：每次最多读取 6 个明确 ID 的切片，批准后只能读取被引用的批准切片；
-- `imitator_submit_review`：绑定当前 pack 指纹，运行 deterministic gate 并写出批准产物；
+- `imitator_submit_review`：绑定当前 pack、任务指纹和实际读取过的证据，生成 proposal；
+- `/imitator-confirm`：由交互式人工身份完成第二次确认；自动 eval 可由隔离 judge 进程确认；
+- `.imitator/pi-state.json`：持久化 task-bound 状态并在重启时重新校验 Git HEAD、checksum 和 pack 结构；
 - `/imitator-status`、`/imitator-reset`、`/imitator-prepare`：提供显式的人机控制面。
 
-扩展状态当前只存在于本次 Pi 进程内；新任务必须 reset，进程重启后必须重新 prepare。扩展只认识配置的工具名，第三方扩展注册的其他写入工具不在拦截集合内。若未来需要不可绕过的 OS 级权限边界，应在 Pi 之外增加 sandbox，而不是把会话 hook 当安全边界。
+新任务仍必须 reset，因为自然语言任务切换不能被可靠自动判定。扩展只认识配置的工具名，第三方扩展注册的其他写入工具不在拦截集合内（本阶段按产品选择暂不处理）。若未来需要不可绕过的 OS 级权限边界，应在 Pi 之外增加 sandbox，而不是把会话 hook 当安全边界。
+
+## Semantic slicing
+
+Provider-neutral core 接受注入式 `SemanticSliceSelector`，本身保留零依赖的确定性行窗口。Pi adapter 注入 TypeScript 5.9 compiler AST selector，对 TS、TSX、JS、JSX、MTS、CTS 等选择预算内的完整 interface、type、enum、class、function、method、variable statement 或测试调用，并记录 strategy 与 symbol。没有合适 AST 单元或语言不支持时回退到原行窗口。
 
 ## 评估计划
 

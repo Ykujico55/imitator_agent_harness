@@ -1,5 +1,7 @@
 export * from "./config.ts";
+export * from "./confirmation.ts";
 export * from "./discovery.ts";
+export * from "./eval.ts";
 export * from "./github.ts";
 export * from "./pipeline.ts";
 export * from "./query.ts";
@@ -7,4 +9,5 @@ export * from "./render.ts";
 export * from "./review.ts";
 export * from "./score.ts";
 export * from "./slice.ts";
+export * from "./task.ts";
 export * from "./types.ts";
