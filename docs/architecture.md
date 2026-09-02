@@ -34,14 +34,16 @@
 
 ## Pi integration
 
-推荐做成薄 extension，而不是 fork Pi：
+已经实现为薄 extension，而不是 fork Pi：
 
-- `before task`：获得用户任务，运行 prepare；
-- review gate：展示候选、分数、许可证和预算，允许用户剔除；
-- context provider：只注入 `AGENT_CONTEXT.md` 与按决策检索的切片；
-- `after task`：记录采用/拒绝的范式、测试结果和回归，形成 eval 数据。
+- `before_agent_start`：注入当前 gate 状态、远程证据不可信规则和渐进式工作协议；
+- `tool_call`：二阶段 gate 通过前拦截 Pi 的修改和命令工具；
+- `imitator_prepare`：调用 provider-neutral 核心并返回候选摘要与切片索引；
+- `imitator_get_evidence`：每次最多读取 6 个明确 ID 的切片，批准后只能读取被引用的批准切片；
+- `imitator_submit_review`：绑定当前 pack 指纹，运行 deterministic gate 并写出批准产物；
+- `/imitator-status`、`/imitator-reset`、`/imitator-prepare`：提供显式的人机控制面。
 
-只有当 Pi extension 生命周期无法提供可靠的 gate 和 context provider 时，才值得 fork agent core。
+扩展状态当前只存在于本次 Pi 进程内；新任务必须 reset，进程重启后必须重新 prepare。扩展只认识配置的工具名，第三方扩展注册的其他写入工具不在拦截集合内。若未来需要不可绕过的 OS 级权限边界，应在 Pi 之外增加 sandbox，而不是把会话 hook 当安全边界。
 
 ## 评估计划
 
