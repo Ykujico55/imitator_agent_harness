@@ -1,4 +1,4 @@
-import type { RepositoryProfile } from "../src/types.ts";
+import type { EvidenceBundle, RepositoryDesignAtlas, RepositoryProfile } from "../src/types.ts";
 
 export function matureRepository(overrides: Partial<RepositoryProfile> = {}): RepositoryProfile {
   return {
@@ -30,5 +30,62 @@ export function matureRepository(overrides: Partial<RepositoryProfile> = {}): Re
       { path: "tsconfig.json", type: "blob", sha: "9", size: 800 },
     ],
     ...overrides,
+  };
+}
+
+export function matureAtlas(repository = matureRepository()): RepositoryDesignAtlas {
+  const ref = (path: string) => ({ path, sourceUrl: `${repository.htmlUrl}/blob/${repository.resolvedRevision}/${path}` });
+  return {
+    schemaVersion: 1,
+    repository: repository.fullName,
+    repositoryUrl: repository.htmlUrl,
+    revision: repository.resolvedRevision,
+    license: repository.license,
+    generatedFrom: "github-tree-and-bounded-content",
+    manifests: [{
+      ...ref("package.json"), ecosystem: "node", parseStatus: "parsed", packageName: "coding-agent",
+      dependencies: [], developmentDependencies: ["typescript"], scripts: ["test"], workspacePatterns: [],
+    }],
+    architectureDocuments: [
+      { ...ref("README.md"), kind: "overview" },
+      { ...ref("docs/architecture.md"), kind: "architecture" },
+    ],
+    entryPoints: [{ ...ref("src/extensions/tool-registry.ts"), reason: "task-relevant public module" }],
+    modules: [{ rootPath: "src/extensions", kind: "library", fileCount: 1, entryPoints: ["src/extensions/tool-registry.ts"] }],
+    relations: [],
+    testFiles: [ref("test/extensions.test.ts")],
+    automationFiles: [ref(".github/workflows/check.yml")],
+    inspectedFiles: [ref("package.json"), ref("src/extensions/tool-registry.ts"), ref("test/extensions.test.ts")],
+    coverage: {
+      score: 90,
+      sufficient: true,
+      requiredCategories: ["source", "test"],
+      presentCategories: ["overview", "design", "manifest", "source", "test", "automation"],
+      missingRequiredCategories: [],
+      signals: [
+        { name: "overview-evidence", points: 10, sources: [ref("README.md")] },
+        { name: "design-evidence", points: 20, sources: [ref("docs/architecture.md")] },
+        { name: "manifest-evidence", points: 10, sources: [ref("package.json")] },
+        { name: "source-evidence", points: 20, sources: [ref("src/extensions/tool-registry.ts")] },
+        { name: "test-evidence", points: 20, sources: [ref("test/extensions.test.ts")] },
+        { name: "automation-evidence", points: 10, sources: [ref(".github/workflows/check.yml")] },
+      ],
+    },
+  };
+}
+
+export function matureBundle(repository = matureRepository(), evidenceSliceIds = ["slice-a", "slice-b"], id = "bundle-architecture"): EvidenceBundle {
+  return {
+    schemaVersion: 1,
+    id,
+    repository: repository.fullName,
+    concern: "system-architecture",
+    question: "How are extension registration, execution, and verification boundaries separated?",
+    epistemicCeiling: "explicit",
+    evidenceKinds: ["documentation", "implementation"],
+    evidenceSliceIds,
+    relatedPaths: ["docs/architecture.md", "src/extensions/tool-registry.ts"],
+    relations: [],
+    limitations: ["The bounded evidence does not establish behavior outside the extension subsystem."],
   };
 }

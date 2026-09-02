@@ -6,31 +6,39 @@
 
 ```text
 任务 → 多查询召回 → 仅读取仓库画像 → 六维评分/许可证门禁
-     → 选出 1 个主蓝图（最多 1 个补充蓝图）→ AST/窗口切片
+     → 选出 1 个主蓝图（最多 1 个补充蓝图）→ Repository Design Atlas
+     → 结构覆盖门禁 → Atlas 引导的 AST/窗口切片
+     → 多模态 Evidence Bundle（关系、限制、认识论上限）
      → 参考选择 proposal → 独立确认
-     → Design Dossier → 独立确认 → 本地适配契约 → coding agent
+     → 带事实/观察/推断/未知分级的 Design Dossier
+     → 独立确认 → 本地适配契约 → coding agent
 ```
 
-## 已实现的 v0.6 工作流
+## 已实现的 v0.8 工作流
 
 - GitHub Repository API 多查询检索、去重和并发画像。
 - 领域匹配、工程成熟度、可迁移性、范式清晰度、设计合理性、风险六维可解释评分。
 - 默认宽松许可证 allowlist；无许可证仓库不会进入参考上下文。
 - 路径排序与固定行数窗口切片，总文件数、切片数和字符数均受预算限制。
 - 最终证据空间硬限制为 1–2 个同领域仓库、每仓库最多 12 个文件、总计 48 个切片和 12 万字符；其余搜索候选不会进入 agent 的学习空间。
+- 对初筛通过的仓库生成 commit-pinned Repository Design Atlas：索引 manifest、模块根、入口、设计文档、测试、CI，并在固定读取预算内解析 Node manifest 与 TS/JS 相对 import/test 关系。
+- Atlas 用 overview、design、manifest、source、test、automation、relationships 七个命名信号计算可解释覆盖分；默认要求源码和测试证据且至少 50 分，不足的仓库不会进入切片与评审阶段。
+- Atlas 只保存带仓库、revision、许可证、路径和链接的结构事实；它用于发现关系和指导检索，不能替代切片对设计意图的举证。
+- 切片之后会按系统架构、模块边界、技术选型、测试策略和失败语义编译 Evidence Bundle；每个包至少包含配置要求的多种证据类型，并保留 Atlas 关系、来源、许可证和已知限制。
+- Evidence Bundle 有 `explicit` 或 `observed` 认识论上限：只有 ADR/RFC/architecture/design 类明确文档支持的包才允许主张作者的显式意图；其余关系只能作为观察事实或受限推断。
 - 默认自动发现最合适的仓库。用户也可显式指定最多两个 GitHub 仓库或 revision：指定项先走同一套领域、成熟度、许可证和风险评估；通过则优先，未通过会明确报告原因并自动回退到默认搜索。
 - 每个切片保留仓库、许可证、分支、文件、行号和 GitHub 链接。
 - 每个切片固定到 commit SHA，并拥有稳定证据 ID。
-- 输出 `manifest.json`、`REFERENCE.md`、`AGENT_CONTEXT.md`、`REVIEW_REQUEST.json` 和 fail-closed 的 `REVIEW_TEMPLATE.json`。
+- 输出 `manifest.json`、`DESIGN_ATLAS.json/.md`、`EVIDENCE_BUNDLES.json/.md`、`REFERENCE.md`、`AGENT_CONTEXT.md`、`REVIEW_REQUEST.json` 和 fail-closed 的 `REVIEW_TEMPLATE.json`。
 - 人或任意模型可填写结构化评审；gate 校验 pack 指纹、证据归属、置信度、风险、范式、错配和风险说明。
-- gate 只输出明确批准且被引用的切片，未评审推断不会进入最终 agent 上下文。
+- gate 以 Evidence Bundle 为评审边界，只输出明确批准且被引用的包及其完整内部证据；伪造包、跨仓库引用和包外切片都会被拒绝。
 - 提供 Pi extension：自动注入工作协议，在参考选择和 Design Dossier 双重门禁通过前拦截 `edit`、`write`、`bash`、`powershell` 和 `apply_patch`。
-- Pi 通过四个渐进式工具完成搜索、按 ID 读取最多 6 个证据切片、提交结构化评审和设计蒸馏；不会把整份参考包直接塞进会话。
+- Pi 通过五个渐进式工具完成搜索、按 ID 读取最多 2 个证据包、读取最多 6 个证据切片、提交结构化评审和设计蒸馏；不会把整份参考包直接塞进会话。
 - 任务指纹绑定规范化任务、工作区路径和 prepare 时的 Git HEAD；Pi 状态带完整性校验持久化到 `.imitator/pi-state.json`，重启可恢复，基线变化则 fail closed。
 - Coding agent 的评审只是 proposal；必须由 `/imitator-confirm` 的交互式人工确认，或隔离的独立 judge 身份确认后才能解锁。
 - 参考确认只会进入 `distilling`，不会解锁编码；agent 还必须提交 evidence-bound、语言无关的 Design Dossier。
 - Dossier 强制描述本地约束/既有惯例/质量属性、设计原则、架构职责与失败模式、规格、测试 oracle、适用与失效条件、权衡、negative space，以及逐项 adopt/adapt/reject 的本地映射。
-- 每个参考派生概念必须引用已批准证据；所有已确认仓库都必须被解释，所有概念都必须有本地决策，非 reject 项必须有目标路径和验收测试。
+- 每个参考派生概念必须引用已批准证据，并由 `explicit`、`observed`、`inferred` 或 `unknown` 主张解释；推断必须记录限制且置信度不高于 0.8，未知不能作为实现概念的唯一依据。
 - Dossier 有 8 万字符及分区数量硬预算；最终 agent context 只含抽象设计契约，不含远程源码或证据 ID。Design 批准后，Pi 也不再向实现 agent 返回原始远程切片。
 - Dossier 先写入 `design-proposal/` 供人工或 judge 审阅；只有不同身份的第二次确认后才进入最终 `approved/` 并解锁。
 - Pi 对 TypeScript/JavaScript 使用 compiler AST 选择完整接口、类型、类、函数或测试单元；其他语言确定性回退到行窗口。
@@ -83,11 +91,12 @@ pi install git:github.com/kunjinkao55/imitator_agent_harness
 在目标项目中设置 `GITHUB_TOKEN` 后启动 `pi`。扩展会要求 agent 依次完成：
 
 1. `imitator_prepare`：为当前任务检索、评分和切片；
-2. `imitator_get_evidence`：只读取当前决策所需的少量切片；
-3. `imitator_submit_review`：提交带证据 ID 的 adopt/adapt/reject proposal；
-4. 人在 Pi 中第一次执行 `/imitator-confirm`，检查任务指纹和仓库；
-5. `imitator_submit_design_dossier`：把已确认证据蒸馏为跨语言设计规格和本地适配图；
-6. 人检查 `design-proposal/DESIGN_DOSSIER.md`，再次执行 `/imitator-confirm` 才解锁编码。
+2. `imitator_get_evidence_bundle`：先读取当前架构问题所需的关系证据包；
+3. `imitator_get_evidence`：再只读取当前判断所需的少量切片；
+4. `imitator_submit_review`：提交带包 ID 和证据 ID 的 adopt/adapt/reject proposal；
+5. 人在 Pi 中第一次执行 `/imitator-confirm`，检查任务指纹和仓库；
+6. `imitator_submit_design_dossier`：把已确认证据蒸馏为带认识论分级的跨语言设计规格和本地适配图；
+7. 人检查 `design-proposal/DESIGN_DOSSIER.md`，再次执行 `/imitator-confirm` 才解锁编码。
 
 `imitator_prepare` 可额外接收 `referenceRepositories: [{ repository, revision? }]`。即使自动搜索检查了更多候选，后续 evidence、review、dossier 和 implementation context 也只允许来自最终 1–2 个仓库。
 
@@ -135,4 +144,4 @@ Pi 只是一层薄适配器：“参考发现”和 deterministic gate 仍是可
 
 ## 当前边界与后续演进
 
-见 [Design Dossier 协议](docs/design-dossier.md) 与 [架构和边界](docs/architecture.md)。当前已经实现 provider-neutral 的结构化协议、Pi 双重持久门禁、人工/独立 judge 确认、TS/JS AST 切片和五阶段 paired A/B eval。尚未产生真实模型实验数据；未知名称的第三方修改工具按此前范围选择暂未纳入门禁。后续重点是更多语言 parser、自动提取本地规范、可靠的任务切换检测和 30–50 个真实任务的重复实验。
+见 [Design Dossier 协议](docs/design-dossier.md) 与 [架构和边界](docs/architecture.md)。当前已经实现 provider-neutral 的结构化协议、Repository Design Atlas、Evidence Bundle、事实/观察/推断/未知分级、Pi 双重持久门禁、人工/独立 judge 确认、TS/JS AST 切片和五阶段 paired A/B eval。Atlas 当前只解析 Node manifest 与 TS/JS 相对 import，其他生态仍以树结构索引；尚未产生真实模型实验数据。后续重点是本地项目同构 Atlas、更多语言 parser，以及跳出 GitHub 限额后运行 30–50 个真实任务的重复实验。

@@ -28,6 +28,14 @@ export function renderDesignDossier(dossier: DesignDossier, referenceGate: GateR
     "Constraints:", ...bullets(dossier.localContext.constraints), "",
     "Existing conventions:", ...bullets(dossier.localContext.existingConventions), "",
     "Required quality attributes:", ...bullets(dossier.localContext.qualityAttributes), "",
+    "## Epistemic claims", "",
+    ...dossier.claims.flatMap((claim) => [
+      `### ${claim.id}: ${claim.status} (${claim.confidence.toFixed(2)})`, "", claim.statement, "",
+      `Bundles: ${claim.evidenceBundleIds.join(", ") || "none"}`,
+      `Supporting evidence: ${evidenceLinks(claim.evidenceSliceIds, referenceGate) || "none"}`,
+      `Counter-evidence: ${evidenceLinks(claim.counterEvidenceSliceIds, referenceGate) || "none"}`,
+      "Limitations:", ...bullets(claim.limitations), "",
+    ]),
     "## Design principles", "",
   ];
   for (const principle of dossier.principles) {
@@ -113,6 +121,8 @@ ${mappings.join("\n")}
 
 export function renderDesignAgentContext(result: DesignGateResult): string {
   const dossier = result.dossier;
+  const claims = dossier.claims.filter((item) => item.status !== "unknown").map((item) => `- [${item.status}; ${item.confidence.toFixed(2)}] ${item.statement}`).join("\n");
+  const uncertainties = dossier.claims.filter((item) => item.status === "unknown").map((item) => `- ${item.statement}: ${item.limitations.join("; ")}`).join("\n");
   const principles = dossier.principles.map((item) => [
     `### ${item.id}: ${item.title}`,
     `- Problem: ${item.problem}`,
@@ -169,6 +179,14 @@ ${bullets(dossier.localContext.existingConventions).join("\n")}
 
 Required quality attributes:
 ${bullets(dossier.localContext.qualityAttributes).join("\n")}
+
+## Evidence-backed claims and confidence
+
+${claims || "- None approved."}
+
+## Known uncertainties
+
+${uncertainties || "- None recorded."}
 
 ## Principles and applicability boundaries
 

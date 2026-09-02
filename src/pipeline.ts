@@ -1,6 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { GitHubClient } from "./github.ts";
+import { applyAtlasCoverageGate, buildRepositoryDesignAtlas, renderDesignAtlases } from "./atlas.ts";
+import { buildEvidenceBundles, renderEvidenceBundles } from "./bundle.ts";
 import { rankSearchCandidates } from "./discovery.ts";
 import type { DesignConfirmation, DesignGateResult, GateResult, HarnessConfig, ReferencePack, RepositoryProfile, ReviewSubmission, TaskSpec } from "./types.ts";
 import { renderAdaptationBrief, renderDesignAgentContext, renderDesignDossier } from "./design-render.ts";
@@ -8,7 +10,7 @@ import { buildDesignDossierRequest, buildDesignDossierTemplate } from "./design.
 import { planQueries } from "./query.ts";
 import { learningRepositoryLimit, MAX_LEARNING_REPOSITORIES, normalizeSpecifiedRepositories } from "./reference.ts";
 import { assessRepository } from "./score.ts";
-import { collectSlices, type SemanticSliceSelector } from "./slice.ts";
+import { collectSlices, type SemanticSliceSelector, type SliceReadFailure } from "./slice.ts";
 import { inferPractices, renderAgentContext, renderReference } from "./render.ts";
 import { buildReviewRequest, buildReviewTemplate, renderGateReport } from "./review.ts";
 
@@ -33,13 +35,17 @@ export async function prepareReferencePack(
 ): Promise<ReferencePack> {
   const specified = normalizeSpecifiedRepositories(task.referenceRepositories) ?? [];
   const learningLimit = learningRepositoryLimit(config.slicing.maxRepositories);
+  const contentCache = new Map<string, string>();
   const specifiedOutcomes = await mapLimited(specified, 2, async (requested) => {
     try {
       const repository = await client.getRepository(requested.repository);
       const profile = await client.profile(repository, requested.revision);
-      const assessment = { ...assessRepository(profile, task, config), selectionOrigin: "user-specified" as const };
+      const initial = { ...assessRepository(profile, task, config), selectionOrigin: "user-specified" as const };
+      const atlas = initial.accepted ? await buildRepositoryDesignAtlas(client, profile, task, config, contentCache) : undefined;
+      const assessment = atlas ? applyAtlasCoverageGate(initial, atlas, config) : initial;
       return {
         assessment,
+        atlas,
         result: {
           ...requested,
           repository: profile.fullName,
@@ -59,36 +65,63 @@ export async function prepareReferencePack(
     }
   });
   const specifiedAssessments = specifiedOutcomes.flatMap((outcome) => outcome.assessment ? [outcome.assessment] : []);
+  const specifiedAtlases = specifiedOutcomes.flatMap((outcome) => outcome.atlas ? [outcome.atlas] : []);
   const acceptedSpecified = specifiedAssessments.filter((assessment) => assessment.accepted);
   let queries: string[] = [];
   let automaticAssessments: ReturnType<typeof assessRepository>[] = [];
+  let automaticAtlases: ReferencePack["atlases"] = [];
   if (acceptedSpecified.length < learningLimit) {
     queries = planQueries(task, config);
     if (!queries.length && acceptedSpecified.length === 0) throw new Error("Could not derive a GitHub query; pass --query explicitly.");
     try {
       const batches = await mapLimited(queries, 3, (query) => client.searchRepositories(query, config.github.candidateLimit));
-      const requestedNames = new Set(specified.map((item) => item.repository.toLowerCase()));
+      const requestedNames = new Set([
+        ...specified.map((item) => item.repository.toLowerCase()),
+        ...specifiedAssessments.map((item) => item.repository.fullName.toLowerCase()),
+      ]);
       const candidates = rankSearchCandidates(batches, task, config.github.inspectLimit)
         .map((candidate) => candidate.repository)
         .filter((repository) => !requestedNames.has(repository.full_name.toLowerCase()));
-      const profileResults = await mapLimited(candidates, 3, async (candidate): Promise<RepositoryProfile | null> => {
-        try { return await client.profile(candidate); } catch { return null; }
-      });
-      automaticAssessments = profileResults.filter((profile): profile is RepositoryProfile => profile !== null)
-        .map((profile) => ({ ...assessRepository(profile, task, config), selectionOrigin: "automatic" as const }))
+      const automaticOutcomes: Array<{ assessment: ReferencePack["assessments"][number]; atlas?: ReferencePack["atlases"][number] }> = [];
+      const needed = learningLimit - acceptedSpecified.length;
+      let acceptedAutomatic = 0;
+      for (const candidate of candidates) {
+        let profile: RepositoryProfile;
+        try { profile = await client.profile(candidate); } catch { continue; }
+        const initial = { ...assessRepository(profile, task, config), selectionOrigin: "automatic" as const };
+        const atlas = initial.accepted ? await buildRepositoryDesignAtlas(client, profile, task, config, contentCache) : undefined;
+        const assessment = atlas ? applyAtlasCoverageGate(initial, atlas, config) : initial;
+        automaticOutcomes.push({ assessment, atlas });
+        if (assessment.accepted) acceptedAutomatic += 1;
+        if (acceptedAutomatic >= needed) break;
+      }
+      automaticAssessments = automaticOutcomes.map((outcome) => outcome.assessment)
         .sort((a, b) => Number(b.accepted) - Number(a.accepted) || b.overall - a.overall || a.repository.fullName.localeCompare(b.repository.fullName));
+      automaticAtlases = automaticOutcomes.flatMap((outcome) => outcome.atlas ? [outcome.atlas] : []);
     } catch (error) {
       if (acceptedSpecified.length === 0) throw error;
       queries = [];
     }
   }
   const assessments = [...specifiedAssessments, ...automaticAssessments];
-  const slices = await collectSlices(client, assessments, task, config, options.semanticSelector);
+  const atlases = [...specifiedAtlases, ...automaticAtlases];
+  const sliceFailures: SliceReadFailure[] = [];
+  const slices = await collectSlices(client, assessments, task, config, options.semanticSelector, atlases, contentCache, sliceFailures);
+  if (assessments.some((assessment) => assessment.accepted) && slices.length === 0) {
+    const reasons = [...new Set(sliceFailures.map((failure) => failure.reason))].slice(0, 3);
+    throw new Error(`Accepted repositories produced no readable evidence slices${reasons.length ? `: ${reasons.join("; ")}` : ""}`);
+  }
+  const bundles = buildEvidenceBundles(atlases, slices, config);
   const selectedRepositories = [...new Set(slices.map((slice) => slice.repository))].slice(0, MAX_LEARNING_REPOSITORIES);
+  for (const repository of selectedRepositories) {
+    if (!bundles.some((bundle) => bundle.repository === repository)) {
+      throw new Error(`Repository ${repository} produced slices but no evidence bundle with ${config.bundles.minimumEvidenceKinds} distinct evidence kinds`);
+    }
+  }
   return {
-    schemaVersion: 2,
+    schemaVersion: 4,
     generatedAt: new Date().toISOString(),
-    task, queries, assessments, slices,
+    task, queries, assessments, atlases, slices, bundles,
     practices: inferPractices({ assessments, slices }),
     selection: {
       schemaVersion: 1,
@@ -108,6 +141,10 @@ export async function writeReferencePack(pack: ReferencePack, outputRoot: string
   const reviewTemplate = buildReviewTemplate(reviewRequest);
   await Promise.all([
     writeFile(resolve(directory, "manifest.json"), `${JSON.stringify(pack, null, 2)}\n`, "utf8"),
+    writeFile(resolve(directory, "DESIGN_ATLAS.json"), `${JSON.stringify(pack.atlases, null, 2)}\n`, "utf8"),
+    writeFile(resolve(directory, "DESIGN_ATLAS.md"), renderDesignAtlases(pack.atlases), "utf8"),
+    writeFile(resolve(directory, "EVIDENCE_BUNDLES.json"), `${JSON.stringify(pack.bundles, null, 2)}\n`, "utf8"),
+    writeFile(resolve(directory, "EVIDENCE_BUNDLES.md"), renderEvidenceBundles(pack.bundles, pack.slices), "utf8"),
     writeFile(resolve(directory, "REFERENCE.md"), renderReference(pack), "utf8"),
     writeFile(resolve(directory, "AGENT_CONTEXT.md"), renderAgentContext(pack), "utf8"),
     writeFile(resolve(directory, "REVIEW_REQUEST.json"), `${JSON.stringify(reviewRequest, null, 2)}\n`, "utf8"),
@@ -124,6 +161,10 @@ export async function writeGateResult(result: GateResult, submission: ReviewSubm
     writeFile(resolve(directory, "REVIEW_SUBMISSION.json"), `${JSON.stringify(submission, null, 2)}\n`, "utf8"),
     writeFile(resolve(directory, "GATE_REPORT.md"), renderGateReport(result, submission.reviewer), "utf8"),
     writeFile(resolve(directory, "APPROVED_REFERENCE.md"), renderReference(result.approvedPack), "utf8"),
+    writeFile(resolve(directory, "APPROVED_DESIGN_ATLAS.json"), `${JSON.stringify(result.approvedPack.atlases, null, 2)}\n`, "utf8"),
+    writeFile(resolve(directory, "APPROVED_DESIGN_ATLAS.md"), renderDesignAtlases(result.approvedPack.atlases), "utf8"),
+    writeFile(resolve(directory, "APPROVED_EVIDENCE_BUNDLES.json"), `${JSON.stringify(result.approvedPack.bundles, null, 2)}\n`, "utf8"),
+    writeFile(resolve(directory, "APPROVED_EVIDENCE_BUNDLES.md"), renderEvidenceBundles(result.approvedPack.bundles, result.approvedPack.slices), "utf8"),
     writeFile(resolve(directory, "APPROVED_AGENT_CONTEXT.md"), renderAgentContext(result.approvedPack), "utf8"),
   ]);
   return directory;

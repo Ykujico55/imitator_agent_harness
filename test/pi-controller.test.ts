@@ -13,7 +13,7 @@ import { createTaskIdentity } from "../src/task.ts";
 import type { DesignDossier, EvidenceSlice, ReferencePack, RepositoryReviewDecision } from "../src/types.ts";
 import { PiHarnessController, type PiHarnessRuntime, type PreparedRun } from "../integrations/pi/controller.ts";
 import { FilePiStateStore, inspectWorkspace, type PersistedPiPayload, type PiStateStore } from "../integrations/pi/state.ts";
-import { matureRepository } from "./helpers.ts";
+import { matureAtlas, matureBundle, matureRepository } from "./helpers.ts";
 
 function preparedRun(): PreparedRun {
   const repository = matureRepository();
@@ -33,12 +33,14 @@ function preparedRun(): PreparedRun {
     content: "export interface HookRegistry {}",
   });
   const pack: ReferencePack = {
-    schemaVersion: 2,
+    schemaVersion: 4,
     generatedAt: "2026-09-01T00:00:00.000Z",
     task: { task: "coding agent hook registry" },
     queries: ["coding agent hook registry"],
     assessments: [assessment],
+    atlases: [matureAtlas(repository)],
     slices: [slice("approved-slice", "src/hooks.ts"), slice("uncited-slice", "test/hooks.test.ts")],
+    bundles: [matureBundle(repository, ["approved-slice"])],
     practices: [],
   };
   return {
@@ -82,6 +84,7 @@ function approvedDecision(): RepositoryReviewDecision {
     transferablePatterns: ["Separate hook registration from hook execution."],
     mismatches: ["Lifecycle names differ from the local project."],
     risks: ["Do not reuse provider-specific types."],
+    evidenceBundleIds: ["bundle-architecture"],
     evidenceSliceIds: ["approved-slice"],
   };
 }
@@ -99,6 +102,11 @@ function approvedDesign(run: PreparedRun): DesignDossier {
       existingConventions: ["The project uses injected interfaces and deterministic output."],
       qualityAttributes: ["Extensibility must preserve fail-closed behavior."],
     },
+    claims: [{
+      id: "claim_registry_boundary", statement: "The reference separates hook registration from provider-specific execution.",
+      status: "observed", confidence: 0.9, evidenceBundleIds: ["bundle-architecture"],
+      evidenceSliceIds: ["approved-slice"], counterEvidenceSliceIds: [], limitations: [],
+    }],
     principles: [{
       id: "principle_registry", title: "Separate registration from execution",
       problem: "Registration concerns otherwise leak into provider-specific runtime execution.", constraints: ["Providers expose different payload types."],
@@ -145,9 +153,14 @@ test("Pi controller enforces prepare-review-approve before mutation", async () =
   assert.equal(controller.status().phase, "reviewing");
   assert.equal(prepared.referencePackFingerprint, fingerprintReferencePack(run.pack));
   assert.equal(prepared.taskFingerprint, run.taskIdentity.fingerprint);
+  assert.equal(prepared.candidates[0]!.atlas.coverage.score, 90);
+  assert.equal(prepared.candidates[0]!.bundles[0]!.id, "bundle-architecture");
   assert.equal(prepared.candidates[0]!.slices.length, 2);
   assert.match(controller.mutationBlockReason("bash")!, /submit_review/);
-  assert.equal((await controller.getEvidence(["approved-slice"]))[0]!.content, "export interface HookRegistry {}");
+  const bundles = await controller.getEvidenceBundles(["bundle-architecture"]);
+  assert.equal(bundles[0]!.slices[0]!.path, "src/hooks.ts");
+  assert.equal(controller.status().readSlices, 0);
+  await controller.getEvidence(["approved-slice"]);
   const result = await controller.submitReview("pi-test", [approvedDecision()]);
   assert.equal(result.approvedPack.slices.length, 1);
   assert.equal(controller.status().phase, "awaiting_confirmation");
@@ -186,6 +199,7 @@ test("Pi state survives restart and rejects an integrity-modified state file", a
   const store = new FilePiStateStore();
   const first = new PiHarnessController(runtime(run), 6, store);
   await first.prepare(run.pack.task, cwd);
+  await first.getEvidenceBundles(["bundle-architecture"]);
   await first.getEvidence(["approved-slice"]);
   await first.submitReview("pi-test", [approvedDecision()]);
   assert.equal(first.status().phase, "awaiting_confirmation");
@@ -262,7 +276,7 @@ test("current Pi loader discovers the declared extension tools, commands, and ga
   assert.deepEqual(loaded.errors, []);
   assert.equal(loaded.extensions.length, 1);
   const extension = loaded.extensions[0]!;
-  assert.deepEqual([...extension.tools.keys()].sort(), ["imitator_get_evidence", "imitator_prepare", "imitator_submit_design_dossier", "imitator_submit_review"]);
+  assert.deepEqual([...extension.tools.keys()].sort(), ["imitator_get_evidence", "imitator_get_evidence_bundle", "imitator_prepare", "imitator_submit_design_dossier", "imitator_submit_review"]);
   assert.deepEqual([...extension.commands.keys()].sort(), ["imitator-confirm", "imitator-prepare", "imitator-reset", "imitator-status"]);
   assert.ok(extension.handlers.has("before_agent_start"));
   assert.ok(extension.handlers.has("tool_call"));

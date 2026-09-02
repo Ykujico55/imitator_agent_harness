@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import type { EvidenceSlice, HarnessConfig, RepositoryAssessment, TaskSpec, TreeEntry } from "./types.ts";
+import type { EvidenceSlice, HarnessConfig, RepositoryAssessment, RepositoryDesignAtlas, TaskSpec, TreeEntry } from "./types.ts";
 import type { GitHubClient } from "./github.ts";
 import { taskTerms } from "./query.ts";
 import { learningRepositoryLimit } from "./reference.ts";
+import { repositoryContentKey } from "./atlas.ts";
 
 export type SliceWindow = {
   start: number;
@@ -20,11 +21,17 @@ export type SemanticSliceSelector = (input: {
   maxLines: number;
 }) => SliceWindow | undefined;
 
+export type SliceReadFailure = {
+  repository: string;
+  path: string;
+  reason: string;
+};
+
 const EXCLUDED = /(^|\/)(node_modules|vendor|dist|build|coverage|fixtures?|snapshots?|generated|\.vscode|\.idea|\.agents)(\/|$)|(^|\/)(AGENTS|CLAUDE)\.md$|^\.github\/(copilot-instructions|instructions)(\/|\.|$)|\.(lock|min\.(js|css)|map|png|jpe?g|gif|pdf|zip|wasm)$|\.i18n\.ya?ml$/i;
 const TEXT_FILE = /(^|\/)(README|ARCHITECTURE|DESIGN|CONTRIBUTING|SECURITY)(\.[^/]*)?$|\.(md|mdx|ts|tsx|js|jsx|py|rs|go|java|kt|rb|toml|ya?ml|json)$/i;
 const DESIGN_PATH = /(^|\/)(architecture|design|adr)(\/|\.|$)|(^|\/)(rfcs?)(\/|$)|(^|\/)(RFC-\d+|ADR-\d+)[^/]*\.md$/i;
 
-export function rankPaths(tree: TreeEntry[], terms: string[]): Array<{ entry: TreeEntry; score: number; reason: string }> {
+export function rankPaths(tree: TreeEntry[], terms: string[], preferredPaths = new Set<string>()): Array<{ entry: TreeEntry; score: number; reason: string }> {
   return tree
     .filter((entry) => entry.type === "blob" && TEXT_FILE.test(entry.path) && !EXCLUDED.test(entry.path) && (entry.size ?? 0) < 120_000)
     .map((entry) => {
@@ -32,6 +39,7 @@ export function rankPaths(tree: TreeEntry[], terms: string[]): Array<{ entry: Tr
       const matches = terms.filter((term) => path.includes(term.toLowerCase()));
       let score = matches.length * 20;
       const reasons: string[] = [];
+      if (preferredPaths.has(entry.path)) { score += 16; reasons.push("design-atlas structural evidence"); }
       if (matches.length) reasons.push(`path matches ${matches.join(", ")}`);
       if (DESIGN_PATH.test(path)) { score += 35; reasons.push("design documentation"); }
       if (/^readme/i.test(path)) { score += 28; reasons.push("project overview"); }
@@ -61,6 +69,13 @@ function pathFamily(path: string): string {
     .replace(/\.(mdx?|ya?ml|json)$/, "");
 }
 
+function evidenceModality(path: string): "documentation" | "manifest" | "implementation" | "test" {
+  if (/(^|\/)(test|tests|spec|__tests__)(\/|$)/i.test(path)) return "test";
+  if (/(^|\/)(package\.json|pyproject\.toml|Cargo\.toml|go\.mod)$/i.test(path)) return "manifest";
+  if (DESIGN_PATH.test(path) || /^readme/i.test(path)) return "documentation";
+  return "implementation";
+}
+
 function diversifyPaths(
   ranked: ReturnType<typeof rankPaths>,
   limit: number,
@@ -76,13 +91,23 @@ function diversifyPaths(
   const counts: Record<string, number> = {};
   const families = new Set<string>();
   const selected: ReturnType<typeof rankPaths> = [];
-  for (const candidate of ranked) {
+  const add = (candidate: ReturnType<typeof rankPaths>[number]): boolean => {
     const bucket = evidenceBucket(candidate.entry.path);
     const family = pathFamily(candidate.entry.path);
-    if (families.has(family) || (counts[bucket] ?? 0) >= (caps[bucket] ?? 1)) continue;
+    if (families.has(family) || (counts[bucket] ?? 0) >= (caps[bucket] ?? 1)) return false;
     families.add(family);
     counts[bucket] = (counts[bucket] ?? 0) + 1;
     selected.push(candidate);
+    return true;
+  };
+  if (ranked[0]) add(ranked[0]);
+  if (limit >= 2 && selected.length === 1) {
+    const firstModality = evidenceModality(selected[0]!.entry.path);
+    const diverse = ranked.find((candidate) => evidenceModality(candidate.entry.path) !== firstModality && !families.has(pathFamily(candidate.entry.path)));
+    if (diverse) add(diverse);
+  }
+  for (const candidate of ranked) {
+    add(candidate);
     if (selected.length >= limit) break;
   }
   return selected;
@@ -110,17 +135,28 @@ export async function collectSlices(
   task: TaskSpec,
   config: HarnessConfig,
   semanticSelector?: SemanticSliceSelector,
+  atlases: RepositoryDesignAtlas[] = [],
+  contentCache = new Map<string, string>(),
+  failures: SliceReadFailure[] = [],
 ): Promise<EvidenceSlice[]> {
   const terms = taskTerms(task);
   const slices: EvidenceSlice[] = [];
   let characters = 0;
   for (const assessment of assessments.filter((item) => item.accepted).slice(0, learningRepositoryLimit(config.slicing.maxRepositories))) {
     const repo = assessment.repository;
-    const ranked = diversifyPaths(rankPaths(repo.tree, terms), config.slicing.maxFilesPerRepository);
+    const atlas = atlases.find((item) => item.repository === repo.fullName);
+    const preferredPaths = new Set([
+      ...(atlas?.entryPoints.map((item) => item.path) ?? []),
+      ...(atlas?.manifests.map((item) => item.path) ?? []),
+      ...(atlas?.architectureDocuments.map((item) => item.path) ?? []),
+    ]);
+    const ranked = diversifyPaths(rankPaths(repo.tree, terms, preferredPaths), config.slicing.maxFilesPerRepository);
     for (const candidate of ranked) {
       if (slices.length >= config.slicing.maxSlices || characters >= config.slicing.maxTotalCharacters) return slices;
       try {
-        const text = await client.readTextFile(repo.fullName, candidate.entry.path, repo.resolvedRevision);
+        const cacheKey = repositoryContentKey(repo.fullName, repo.resolvedRevision, candidate.entry.path);
+        const text = contentCache.get(cacheKey) ?? await client.readTextFile(repo.fullName, candidate.entry.path, repo.resolvedRevision);
+        contentCache.set(cacheKey, text);
         if (text.includes("\0")) continue;
         let semanticWindow: SliceWindow | undefined;
         try {
@@ -159,8 +195,13 @@ export async function collectSlices(
           strategy: window.strategy,
           symbols: window.symbols,
         });
-      } catch {
+      } catch (error) {
         // A single unreadable, moved, or oversized file must not fail the reference run.
+        failures.push({
+          repository: repo.fullName,
+          path: candidate.entry.path,
+          reason: error instanceof Error ? error.message : String(error),
+        });
       }
     }
   }

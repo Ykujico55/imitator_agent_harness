@@ -67,9 +67,70 @@ export type ScoreDimension = {
   reasons: string[];
 };
 
+export type AtlasEvidenceCategory = "overview" | "design" | "manifest" | "source" | "test" | "automation" | "relationships";
+
+export type AtlasSourceRef = {
+  path: string;
+  sourceUrl: string;
+};
+
+export type AtlasCoverage = {
+  score: number;
+  sufficient: boolean;
+  requiredCategories: AtlasEvidenceCategory[];
+  presentCategories: AtlasEvidenceCategory[];
+  missingRequiredCategories: AtlasEvidenceCategory[];
+  signals: Array<{
+    name: string;
+    points: number;
+    sources: AtlasSourceRef[];
+  }>;
+};
+
+export type RepositoryDesignAtlas = {
+  schemaVersion: 1;
+  repository: string;
+  repositoryUrl: string;
+  revision: string;
+  license: string | null;
+  generatedFrom: "github-tree-and-bounded-content";
+  manifests: Array<{
+    path: string;
+    sourceUrl: string;
+    ecosystem: string;
+    parseStatus: "parsed" | "indexed" | "invalid" | "unreadable" | "not-inspected";
+    packageName?: string;
+    dependencies: string[];
+    developmentDependencies: string[];
+    scripts: string[];
+    workspacePatterns: string[];
+  }>;
+  architectureDocuments: Array<AtlasSourceRef & {
+    kind: "overview" | "architecture" | "decision" | "security";
+  }>;
+  entryPoints: Array<AtlasSourceRef & { reason: string }>;
+  modules: Array<{
+    rootPath: string;
+    kind: "application" | "library" | "package" | "test" | "example";
+    fileCount: number;
+    entryPoints: string[];
+  }>;
+  relations: Array<{
+    from: string;
+    to: string;
+    kind: "imports" | "tests";
+    evidence: AtlasSourceRef;
+  }>;
+  testFiles: AtlasSourceRef[];
+  automationFiles: AtlasSourceRef[];
+  inspectedFiles: AtlasSourceRef[];
+  coverage: AtlasCoverage;
+};
+
 export type RepositoryAssessment = {
   repository: RepositoryProfile;
   selectionOrigin?: "user-specified" | "automatic";
+  atlasCoverage?: AtlasCoverage;
   dimensions: {
     domainMatch: ScoreDimension;
     engineeringMaturity: ScoreDimension;
@@ -100,6 +161,24 @@ export type EvidenceSlice = {
   symbols?: string[];
 };
 
+export type EpistemicStatus = "explicit" | "observed" | "inferred" | "unknown";
+
+export type EvidenceKind = "documentation" | "implementation" | "test" | "manifest" | "relationship";
+
+export type EvidenceBundle = {
+  schemaVersion: 1;
+  id: string;
+  repository: string;
+  concern: "system-architecture" | "module-boundary" | "technology-selection" | "testing-strategy" | "failure-semantics";
+  question: string;
+  epistemicCeiling: "explicit" | "observed";
+  evidenceKinds: EvidenceKind[];
+  evidenceSliceIds: string[];
+  relatedPaths: string[];
+  relations: RepositoryDesignAtlas["relations"];
+  limitations: string[];
+};
+
 export type HarnessConfig = {
   github: {
     minimumStars: number;
@@ -119,6 +198,17 @@ export type HarnessConfig = {
     maxSlices: number;
     maxTotalCharacters: number;
   };
+  atlas: {
+    maxFiles: number;
+    maxTotalCharacters: number;
+    minimumCoverage: number;
+    requiredCategories: AtlasEvidenceCategory[];
+  };
+  bundles: {
+    maxBundlesPerRepository: number;
+    maxSlicesPerBundle: number;
+    minimumEvidenceKinds: number;
+  };
   review: {
     minimumConfidence: number;
     minimumEvidenceSlices: number;
@@ -127,12 +217,14 @@ export type HarnessConfig = {
 };
 
 export type ReferencePack = {
-  schemaVersion: 2;
+  schemaVersion: 4;
   generatedAt: string;
   task: TaskSpec;
   queries: string[];
   assessments: RepositoryAssessment[];
+  atlases: RepositoryDesignAtlas[];
   slices: EvidenceSlice[];
+  bundles: EvidenceBundle[];
   practices: string[];
   selection?: ReferenceSelection;
 };
@@ -149,6 +241,7 @@ export type RepositoryReviewDecision = {
   transferablePatterns: string[];
   mismatches: string[];
   risks: string[];
+  evidenceBundleIds: string[];
   evidenceSliceIds: string[];
 };
 
@@ -164,6 +257,8 @@ export type ReviewRequest = {
     license: string | null;
     phaseOneOverall: number;
     dimensions: RepositoryAssessment["dimensions"];
+    atlas: RepositoryDesignAtlas;
+    bundles: EvidenceBundle[];
     slices: Array<Pick<EvidenceSlice, "id" | "path" | "startLine" | "endLine" | "sourceUrl" | "reason" | "content">>;
   }>;
 };
@@ -202,6 +297,17 @@ export type ReviewConfirmation = {
 
 export type DesignDecision = "adopt" | "adapt" | "reject";
 export type TestLayer = "unit" | "integration" | "contract" | "property" | "end-to-end";
+
+export type DesignClaim = {
+  id: string;
+  statement: string;
+  status: EpistemicStatus;
+  confidence: number;
+  evidenceBundleIds: string[];
+  evidenceSliceIds: string[];
+  counterEvidenceSliceIds: string[];
+  limitations: string[];
+};
 
 export type DesignPrinciple = {
   id: string;
@@ -270,6 +376,7 @@ export type DesignDossier = {
     existingConventions: string[];
     qualityAttributes: string[];
   };
+  claims: DesignClaim[];
   principles: DesignPrinciple[];
   architecture: ArchitectureConcept[];
   specifications: SpecificationConcept[];
@@ -293,6 +400,8 @@ export type DesignDossierRequest = {
     license: string | null;
     revision: string;
   }>;
+  atlases: RepositoryDesignAtlas[];
+  bundles: EvidenceBundle[];
   evidenceIndex: Array<{
     id: string;
     repository: string;

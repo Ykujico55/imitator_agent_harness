@@ -1,6 +1,6 @@
 {
   "name": "imitator-agent-harness",
-  "version": "0.6.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "description": "Evidence-bound design-taste distillation and dual confirmation for coding agents.",

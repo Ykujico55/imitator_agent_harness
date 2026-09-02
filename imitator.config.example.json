@@ -17,6 +17,17 @@
     "maxSlices": 48,
     "maxTotalCharacters": 120000
   },
+  "atlas": {
+    "maxFiles": 12,
+    "maxTotalCharacters": 120000,
+    "minimumCoverage": 50,
+    "requiredCategories": ["source", "test"]
+  },
+  "bundles": {
+    "maxBundlesPerRepository": 8,
+    "maxSlicesPerBundle": 6,
+    "minimumEvidenceKinds": 2
+  },
   "review": {
     "minimumConfidence": 0.7,
     "minimumEvidenceSlices": 1,

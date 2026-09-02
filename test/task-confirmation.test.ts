@@ -6,7 +6,7 @@ import { applyReviewGate, fingerprintReferencePack } from "../src/review.ts";
 import { assessRepository } from "../src/score.ts";
 import { createTaskIdentity, fingerprintTask, normalizeTaskSpec } from "../src/task.ts";
 import type { EvidenceSlice, ReferencePack, ReviewSubmission } from "../src/types.ts";
-import { matureRepository } from "./helpers.ts";
+import { matureAtlas, matureBundle, matureRepository } from "./helpers.ts";
 
 function fixture(): { pack: ReferencePack; submission: ReviewSubmission } {
   const repository = matureRepository();
@@ -26,12 +26,14 @@ function fixture(): { pack: ReferencePack; submission: ReviewSubmission } {
     content: "export interface Registry {}",
   };
   const pack: ReferencePack = {
-    schemaVersion: 2,
+    schemaVersion: 4,
     generatedAt: "2026-09-01T00:00:00.000Z",
     task: { task: "coding agent hook registry" },
     queries: ["coding agent hook registry"],
     assessments: [assessment],
+    atlases: [matureAtlas(repository)],
     slices: [slice],
+    bundles: [matureBundle(repository, [slice.id])],
     practices: [],
   };
   const submission: ReviewSubmission = {
@@ -47,6 +49,7 @@ function fixture(): { pack: ReferencePack; submission: ReviewSubmission } {
       transferablePatterns: ["Separate registration from execution."],
       mismatches: ["Lifecycle names differ."],
       risks: ["Do not copy provider types."],
+      evidenceBundleIds: ["bundle-architecture"],
       evidenceSliceIds: [slice.id],
     }],
   };

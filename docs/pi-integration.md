@@ -30,18 +30,20 @@ npx pi -e ./integrations/pi/index.ts
 
 1. 会话开始时状态为 `idle`，修改与 shell 工具被拦截。
 2. Agent 调用 `imitator_prepare`，传入具体任务以及可选查询、语言、生态、约束和最多两个 `referenceRepositories`。每项包含 GitHub `owner/repo` 或 URL，以及可选 branch/tag/commit。
-3. 指定仓库先走相同的六维与许可证评估。通过者优先进入学习集合；拒绝或不可用时，Pi 返回明确原因并自动运行默认发现。返回值只有最终 1–2 个候选的评分、来源类型、许可证、切片 ID、路径、行号和选择理由，不包含全部代码。
-4. Agent 用 `imitator_get_evidence` 按需读取最多 6 个切片。返回内容有明确的 `UNTRUSTED EVIDENCE` 边界，评审不能引用尚未读取的 ID。
-5. Agent 用 `imitator_submit_review` 提交每个仓库的 adopt/adapt/reject、置信度、风险、范式、错配、风险说明和引用切片；通过后进入 `awaiting_confirmation`，仍不解锁。
-6. 人第一次执行 `/imitator-confirm`，核对任务指纹和 provisional 仓库；自动化 eval 则由第一个隔离 judge 确认。成功后只进入 `distilling`，编码仍锁定。
-7. Agent 可继续按需读取已批准证据，然后用 `imitator_submit_design_dossier` 提交本地约束、质量属性、跨语言原则、架构职责/失败模式、规格、测试 oracle、适用边界、negative space 和逐项本地映射。
-8. 确定性 design gate 通过后进入 `awaiting_design_confirmation`，提案写入 `design-proposal/DESIGN_DOSSIER.md`。人检查该文件并第二次执行 `/imitator-confirm`；自动 eval 使用第二个隔离 judge。
-9. 只有两层 gate 均确认后才进入 `approved`。系统提示只携带本地化抽象设计契约，不含远程源码或证据 ID；原始证据工具也随即关闭。
-10. 新任务执行 `/imitator-reset`，重新锁定修改工具并清空持久状态。若直接启动新的 prepare，旧状态也会在远程工作前先被清除。
+3. 指定仓库先走相同的六维与许可证评估。初筛通过后，系统建立固定 commit 的 Design Atlas，并用 overview/design/manifest/source/test/automation/relationships 七类结构证据执行覆盖门禁。通过者优先进入学习集合；拒绝或不可用时，Pi 返回明确原因并自动运行默认发现。
+4. Prepare 返回最终 1–2 个候选的评分、来源类型、许可证、Atlas 摘要、Evidence Bundle 摘要和切片索引，不包含全部代码。Agent 应先用 Atlas 定位架构问题，再选择关系证据包。
+5. Agent 用 `imitator_get_evidence_bundle` 每次读取最多 2 个包。包返回设计问题、证据类型、Atlas 关系、认识论上限、限制及切片索引，不加载源码。
+6. 必要时再用 `imitator_get_evidence` 按 ID 读取最多 6 个切片；源码内容带明确的 `UNTRUSTED EVIDENCE` 边界。评审只能引用已经检查过的包以及属于这些包、且实际读取过的切片。
+7. Agent 用 `imitator_submit_review` 提交每个仓库的 adopt/adapt/reject、置信度、风险、范式、错配、风险说明、包 ID 和引用切片；通过后进入 `awaiting_confirmation`，仍不解锁。
+8. 人第一次执行 `/imitator-confirm`，核对任务指纹和 provisional 仓库；自动化 eval 则由第一个隔离 judge 确认。成功后只进入 `distilling`，编码仍锁定。
+9. Agent 可继续按需读取已批准证据，然后用 `imitator_submit_design_dossier` 提交认识论分级 claims、本地约束、质量属性、跨语言原则、架构职责/失败模式、规格、测试 oracle、适用边界、negative space 和逐项本地映射。
+10. 确定性 design gate 通过后进入 `awaiting_design_confirmation`，提案写入 `design-proposal/DESIGN_DOSSIER.md`。人检查该文件并第二次执行 `/imitator-confirm`；自动 eval 使用第二个隔离 judge。
+11. 只有两层 gate 均确认后才进入 `approved`。系统提示只携带本地化抽象设计契约，不含远程源码或证据 ID；原始证据工具也随即关闭。
+12. 新任务执行 `/imitator-reset`，重新锁定修改工具并清空持久状态。若直接启动新的 prepare，旧状态也会在远程工作前先被清除。
 
 辅助命令：
 
-- `/imitator-status`：显示当前 phase、任务、候选、切片和批准数量；
+- `/imitator-status`：显示当前 phase、任务、候选、证据包、切片、认识论 claim 和批准数量；
 - `/imitator-prepare <任务>`：由人显式开始 prepare；
 - `/imitator-confirm`：按当前 phase 确认参考选择或 Design Dossier；
 - `/imitator-reset`：开始新任务或放弃当前参考包。
@@ -81,11 +83,11 @@ npm run check
 
 - controller 的 prepare → review → reference confirm → distill → design confirm → approve → reset 状态机；
 - 两层独立确认前后的修改工具拦截；
-- 单次证据读取数量限制和批准后证据收缩；
+- 单次包/切片读取数量限制、未读包不可评审和批准后证据收缩；
 - 当前 Pi `DefaultResourceLoader` 对实际 extension 的加载，及工具、命令、事件 handler 注册；
 - 持久状态重启恢复、任务/HEAD 绑定和修改后 checksum 拒绝；
 - proposal reviewer 与 human/independent-agent confirmer 身份分离；
-- Dossier 的证据归属、全概念本地映射、适用边界、本地约束、上下文预算和第二确认身份分离；
+- Dossier 的包内证据归属、认识论上限、推断限制、全概念本地映射、适用边界、本地约束、上下文预算和第二确认身份分离；
 - TypeScript compiler AST 完整声明切片和非支持语言回退；
 - 全部 provider-neutral 核心测试、严格 TypeScript 检查和 CLI 启动。
 

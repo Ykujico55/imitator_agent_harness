@@ -11,6 +11,7 @@ Design Dossier 是 reference selection 与实际编码之间的压缩层。它�
 一份 schema v1 dossier 绑定 `taskFingerprint`、`referencePackFingerprint`、作者和全部已确认仓库，并且仓库数必须为 1–2 个。它包含：
 
 - `localContext`：本地硬约束、既有惯例和质量属性，防止上游设计覆盖本地事实；
+- `claims`：把每条参考派生判断标为 `explicit`、`observed`、`inferred` 或 `unknown`，绑定 Evidence Bundle、支持/反证切片、置信度和限制；
 - `principles`：问题、约束、决定、机制、权衡、非目标、适用与失效条件；
 - `architecture`：职责、协作者、不变量、失败模式和扩展点；
 - `specifications`：前置条件、后置条件、不变量和错误语义；
@@ -19,7 +20,11 @@ Design Dossier 是 reference selection 与实际编码之间的压缩层。它�
 - `localMappings`：每个参考概念在本地的 adopt/adapt/reject 决策、理由、必要改造、目标路径和验收测试；
 - `globalRisks`：仍可能破坏设计意图的跨模块风险。
 
-每个参考派生的 principle、architecture、specification、test concept 和 negative-space 选择都必须引用已批准的 evidence slice ID。Local context 和适配决策来自本地事实，不应伪装成上游证据。
+每个参考派生的 principle、architecture、specification、test concept 和 negative-space 选择都必须引用已批准的 evidence slice ID，而且该切片必须先被一条非 `unknown` claim 分类。Local context 和适配决策来自本地事实，不应伪装成上游证据。
+
+Repository Design Atlas 随 request 提供模块、入口、manifest、测试和依赖关系索引，帮助 agent 判断应该读取哪些证据以及概念处于什么结构位置。Atlas 事实不能替代 slice ID：尤其是技术选型理由，若 ADR/RFC 或其他批准证据没有明确说明，就必须视为未知或模型推断，不能写成上游作者的明确意图。
+
+Evidence Bundle 是 claim 的最小关系边界。Claim 引用的支持和反证切片必须属于它引用的包。`explicit` 必须引用上限为 explicit 的包，并直接引用 ADR、RFC、architecture 或 design 文档切片；`observed` 必须有支持切片；`inferred` 必须有支持切片、明确限制且置信度不高于 0.8；`unknown` 必须说明缺失什么，置信度不高于 0.2，并且不能单独支撑设计概念。
 
 ## 确定性不变量
 
@@ -27,6 +32,8 @@ Design gate 默认拒绝以下情况：
 
 - task 或 reference pack 指纹不匹配；
 - 使用未确认仓库、遗漏已确认仓库、或引用未批准证据；
+- claim 引用未知 Evidence Bundle、包外切片，或把 observed 上限的证据写成 explicit 意图；
+- 推断没有限制、置信度超过 0.8，unknown 没有说明缺失证据，或概念使用了只被 unknown claim 分类的证据；
 - 任一设计概念没有证据，或任一仓库没有被实际用于设计证据；
 - 缺失架构、规格、测试、negative space、本地上下文或全局风险；
 - 原则没有约束、机制、权衡、fits-when 或 fails-when；

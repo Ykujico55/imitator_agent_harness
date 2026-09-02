@@ -1,4 +1,5 @@
 node_modules/
+.npm-cache*/
 .imitator/
 .env
 *.log

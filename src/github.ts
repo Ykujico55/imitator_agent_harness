@@ -44,7 +44,7 @@ export class GitHubClient {
       headers: {
         Accept: "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "imitator-agent-harness/0.6",
+        "User-Agent": "imitator-agent-harness/0.8",
         ...(this.#token ? { Authorization: `Bearer ${this.#token}` } : {}),
       },
     });

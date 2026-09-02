@@ -60,7 +60,10 @@ async function prepareCommand(): Promise<void> {
   if (values.json) console.log(JSON.stringify(pack, null, 2));
   else {
     console.log(`Reference pack: ${directory}`);
-    console.log(`Inspected: ${pack.assessments.length}; accepted: ${pack.assessments.filter((item) => item.accepted).length}; slices: ${pack.slices.length}`);
+    console.log(`Inspected: ${pack.assessments.length}; accepted: ${pack.assessments.filter((item) => item.accepted).length}; atlases: ${pack.atlases.length}; slices: ${pack.slices.length}; bundles: ${pack.bundles.length}`);
+    for (const assessment of pack.assessments.filter((item) => item.atlasCoverage)) {
+      console.log(`Atlas ${assessment.repository.fullName}: ${assessment.atlasCoverage!.score}/100 — ${assessment.atlasCoverage!.sufficient ? "sufficient" : `missing ${assessment.atlasCoverage!.missingRequiredCategories.join(", ") || "coverage"}`}`);
+    }
     for (const specified of pack.selection?.specified ?? []) {
       console.log(`Specified ${specified.repository}: ${specified.status} — ${specified.reasons.join("; ")}`);
     }
@@ -81,8 +84,8 @@ async function gateCommand(): Promise<void> {
   if (!values.manifest) throw new Error("--manifest is required");
   if (!values.decisions) throw new Error("--decisions is required");
   const rawPack = JSON.parse(await readFile(values.manifest, "utf8")) as ReferencePack;
-  if (rawPack.schemaVersion !== 2 || !Array.isArray(rawPack.assessments) || !Array.isArray(rawPack.slices)) {
-    throw new Error("Unsupported or malformed reference pack; expected schemaVersion 2");
+  if (rawPack.schemaVersion !== 4 || !Array.isArray(rawPack.assessments) || !Array.isArray(rawPack.atlases) || !Array.isArray(rawPack.slices) || !Array.isArray(rawPack.bundles)) {
+    throw new Error("Unsupported or malformed reference pack; expected schemaVersion 4");
   }
   const submission = parseReviewSubmission(JSON.parse(await readFile(values.decisions, "utf8")));
   const config = await loadConfig(values.config);

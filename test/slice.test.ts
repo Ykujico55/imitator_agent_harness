@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { selectTypeScriptAstWindow } from "../integrations/typescript-ast.ts";
 import { defaultConfig } from "../src/config.ts";
-import { rankPaths, collectSlices } from "../src/slice.ts";
+import { rankPaths, collectSlices, type SliceReadFailure } from "../src/slice.ts";
 import { assessRepository } from "../src/score.ts";
 import type { GitHubClient } from "../src/github.ts";
 import { matureRepository } from "./helpers.ts";
@@ -41,6 +41,19 @@ test("collects bounded, attributed windows and ignores unreadable files", async 
   assert.match(slices[0]!.sourceUrl, /github\.com\/example\/coding-agent\/blob\/abc123def456\//);
   assert.equal(slices[0]!.commitish, "abc123def456");
   assert.equal(slices[0]!.license, "MIT");
+});
+
+test("reports bounded slice read failures instead of silently losing all evidence", async () => {
+  const repo = matureRepository();
+  const assessment = assessRepository(repo, { task: "coding agent extensions" }, defaultConfig, new Date("2026-09-01T00:00:00Z"));
+  const fakeClient = { async readTextFile(): Promise<string> { throw new Error("GitHub rate limit exhausted"); } } as unknown as GitHubClient;
+  const config = structuredClone(defaultConfig);
+  config.slicing.maxFilesPerRepository = 2;
+  const failures: SliceReadFailure[] = [];
+  const slices = await collectSlices(fakeClient, [assessment], { task: "coding agent extensions" }, config, undefined, [], new Map(), failures);
+  assert.deepEqual(slices, []);
+  assert.equal(failures.length, 2);
+  assert.ok(failures.every((failure) => failure.reason === "GitHub rate limit exhausted"));
 });
 
 test("scales category quotas to use a larger per-repository evidence budget", async () => {

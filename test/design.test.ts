@@ -11,7 +11,7 @@ import { assessRepository } from "../src/score.ts";
 import { createTaskIdentity } from "../src/task.ts";
 import { writeDesignProposal, writeDesignRequest, writeDesignResult, writeGateResult } from "../src/pipeline.ts";
 import type { DesignDossier, EvidenceSlice, GateResult, ReferencePack, ReviewSubmission } from "../src/types.ts";
-import { matureRepository } from "./helpers.ts";
+import { matureAtlas, matureBundle, matureRepository } from "./helpers.ts";
 
 function referenceFixture(): { pack: ReferencePack; gate: GateResult; submission: ReviewSubmission; taskFingerprint: string } {
   const repository = matureRepository();
@@ -23,8 +23,9 @@ function referenceFixture(): { pack: ReferencePack; gate: GateResult; submission
     reason: "registry contract", content: "export interface HookRegistry { register(name: string): void }",
   };
   const pack: ReferencePack = {
-    schemaVersion: 2, generatedAt: "2026-09-01T00:00:00.000Z", task: { task: "coding agent hook registry" },
-    queries: ["coding agent hook registry"], assessments: [assessment], slices: [slice], practices: [],
+    schemaVersion: 4, generatedAt: "2026-09-01T00:00:00.000Z", task: { task: "coding agent hook registry" },
+    queries: ["coding agent hook registry"], assessments: [assessment], atlases: [matureAtlas(repository)], slices: [slice],
+    bundles: [matureBundle(repository, [slice.id])], practices: [],
   };
   const submission: ReviewSubmission = {
     schemaVersion: 1, referencePackFingerprint: fingerprintReferencePack(pack), reviewer: "selection-agent",
@@ -32,7 +33,7 @@ function referenceFixture(): { pack: ReferencePack; gate: GateResult; submission
       repository: repository.fullName, verdict: "adapt", confidence: 0.9, riskLevel: "medium",
       summary: "The registry boundary transfers after adapting lifecycle naming.",
       transferablePatterns: ["Separate hook registration from execution."], mismatches: ["Lifecycle names differ."],
-      risks: ["Provider types must not enter the core."], evidenceSliceIds: [slice.id],
+      risks: ["Provider types must not enter the core."], evidenceBundleIds: ["bundle-architecture"], evidenceSliceIds: [slice.id],
     }],
   };
   const gate = applyReviewGate(pack, submission, defaultConfig);
@@ -53,6 +54,16 @@ function dossier(taskFingerprint: string, referencePackFingerprint: string): Des
       existingConventions: ["The local project uses narrow injected interfaces and deterministic errors."],
       qualityAttributes: ["Evolvability without weakening deterministic safety checks."],
     },
+    claims: [{
+      id: "claim_registry_boundary",
+      statement: "The reference separates registration metadata from provider-specific execution behavior.",
+      status: "observed",
+      confidence: 0.9,
+      evidenceBundleIds: ["bundle-architecture"],
+      evidenceSliceIds: ["design-evidence"],
+      counterEvidenceSliceIds: [],
+      limitations: [],
+    }],
     principles: [{
       id: "principle_registry_boundary", title: "Registry and execution remain separate",
       problem: "Registration-time concerns otherwise leak into runtime execution paths.",
@@ -108,6 +119,7 @@ test("approves a complete evidence-bound cross-language design dossier", () => {
   assert.deepEqual(result.evidenceSliceIds, ["design-evidence"]);
   const request = buildDesignDossierRequest(fixture.gate, fixture.taskFingerprint);
   assert.equal(request.evidenceIndex[0]!.license, "MIT");
+  assert.equal(request.atlases[0]!.repository, "example/coding-agent");
   assert.equal(buildDesignDossierTemplate(request).principles.length, 0);
   const confirmation = buildDesignConfirmation(result, "human-designer", "human", "2026-09-02T00:00:00.000Z");
   assert.equal(confirmDesignDossier(result, confirmation).generatedAt, confirmation.confirmedAt);
@@ -129,12 +141,40 @@ test("rejects unsupported claims, incomplete applicability, unmapped concepts, a
   assert.throws(() => confirmDesignDossier(valid, buildDesignConfirmation(valid, "design-agent", "human")), /different human or agent identity/);
 });
 
+test("rejects overconfident inference and evidence used without a non-unknown claim", () => {
+  const fixture = referenceFixture();
+  const inferred = dossier(fixture.taskFingerprint, fixture.gate.referencePackFingerprint);
+  inferred.claims[0]!.status = "inferred";
+  inferred.claims[0]!.confidence = 0.95;
+  inferred.claims[0]!.limitations = [];
+  const inferredResult = evaluateDesignDossier(inferred, fixture.gate, fixture.taskFingerprint);
+  assert.equal(inferredResult.approved, false);
+  assert.ok(inferredResult.reasons.some((reason) => /inferred claim has no limitations/.test(reason)));
+  assert.ok(inferredResult.reasons.some((reason) => /inferred confidence 0.95 exceeds 0.8/.test(reason)));
+
+  const unknown = dossier(fixture.taskFingerprint, fixture.gate.referencePackFingerprint);
+  unknown.claims[0]!.status = "unknown";
+  unknown.claims[0]!.confidence = 0.1;
+  unknown.claims[0]!.limitations = ["The bounded evidence does not establish the author's intended lifecycle semantics."];
+  const unknownResult = evaluateDesignDossier(unknown, fixture.gate, fixture.taskFingerprint);
+  assert.equal(unknownResult.approved, false);
+  assert.ok(unknownResult.reasons.some((reason) => /without a non-unknown epistemic claim/.test(reason)));
+
+  const explicitFromImplementation = dossier(fixture.taskFingerprint, fixture.gate.referencePackFingerprint);
+  explicitFromImplementation.claims[0]!.status = "explicit";
+  explicitFromImplementation.claims[0]!.confidence = 0.95;
+  const explicitResult = evaluateDesignDossier(explicitFromImplementation, fixture.gate, fixture.taskFingerprint);
+  assert.equal(explicitResult.approved, false);
+  assert.ok(explicitResult.reasons.some((reason) => /does not directly cite an ADR, RFC, architecture, or design document/.test(reason)));
+});
+
 test("renders design intent and local contracts without embedding remote source content", () => {
   const fixture = referenceFixture();
   const input = dossier(fixture.taskFingerprint, fixture.gate.referencePackFingerprint);
   const result = evaluateDesignDossier(input, fixture.gate, fixture.taskFingerprint);
   const markdown = renderDesignDossier(input, fixture.gate);
   assert.match(markdown, /Registry and execution remain separate/);
+  assert.match(markdown, /Epistemic claims/);
   assert.match(markdown, /design-evidence/);
   assert.doesNotMatch(markdown, /export interface HookRegistry/);
   assert.match(renderAdaptationBrief(input), /Acceptance tests/);
@@ -166,8 +206,11 @@ test("writes auditable request, proposal, and final design artifacts", async (t)
   const request = JSON.parse(await readFile(resolve(output, "reference-approved", "DESIGN_DOSSIER_REQUEST.json"), "utf8"));
   assert.equal(request.evidenceIndex[0].license, "MIT");
   assert.equal(request.evidenceIndex[0].id, "design-evidence");
+  assert.equal(request.atlases[0].coverage.score, 90);
   const reviewSubmission = JSON.parse(await readFile(resolve(output, "review-proposal", "REVIEW_SUBMISSION.json"), "utf8"));
   assert.equal(reviewSubmission.reviewer, "selection-agent");
+  const approvedAtlas = await readFile(resolve(output, "review-proposal", "APPROVED_DESIGN_ATLAS.md"), "utf8");
+  assert.match(approvedAtlas, /Coverage: 90\/100/);
   const proposal = await readFile(resolve(output, "design-proposal", "DESIGN_DOSSIER.md"), "utf8");
   assert.match(proposal, /license: MIT/);
   assert.doesNotMatch(proposal, /export interface HookRegistry/);

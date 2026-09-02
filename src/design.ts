@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type {
   ArchitectureConcept,
   DesignConfirmation,
+  DesignClaim,
   DesignDossier,
   DesignDossierRequest,
   DesignGateResult,
@@ -12,10 +13,12 @@ import type {
   TestConcept,
 } from "./types.ts";
 import { MAX_LEARNING_REPOSITORIES } from "./reference.ts";
+import { supportsExplicitIntent } from "./bundle.ts";
 
 const ID = /^[a-z][a-z0-9_-]{2,63}$/;
 const TEST_LAYERS = new Set(["unit", "integration", "contract", "property", "end-to-end"]);
 const DECISIONS = new Set(["adopt", "adapt", "reject"]);
+const EPISTEMIC_STATUSES = new Set(["explicit", "observed", "inferred", "unknown"]);
 export const MAX_DESIGN_DOSSIER_CHARACTERS = 80_000;
 const MAX_DESIGN_TEXT_CHARACTERS = 2_000;
 
@@ -89,6 +92,24 @@ function parseMapping(item: Record<string, unknown>, label: string): LocalDesign
   };
 }
 
+function parseClaim(item: Record<string, unknown>, label: string): DesignClaim {
+  const status = stringValue(item.status, `${label}.status`) as DesignClaim["status"];
+  if (!EPISTEMIC_STATUSES.has(status)) throw new Error(`${label}.status is invalid`);
+  if (typeof item.confidence !== "number" || !Number.isFinite(item.confidence) || item.confidence < 0 || item.confidence > 1) {
+    throw new Error(`${label}.confidence must be between 0 and 1`);
+  }
+  return {
+    id: stringValue(item.id, `${label}.id`),
+    statement: stringValue(item.statement, `${label}.statement`),
+    status,
+    confidence: item.confidence,
+    evidenceBundleIds: stringArray(item.evidenceBundleIds, `${label}.evidenceBundleIds`),
+    evidenceSliceIds: stringArray(item.evidenceSliceIds, `${label}.evidenceSliceIds`),
+    counterEvidenceSliceIds: stringArray(item.counterEvidenceSliceIds, `${label}.counterEvidenceSliceIds`),
+    limitations: stringArray(item.limitations, `${label}.limitations`),
+  };
+}
+
 export function parseDesignDossier(value: unknown): DesignDossier {
   const root = record(value, "design dossier");
   if (root.schemaVersion !== 1) throw new Error("design dossier schemaVersion must be 1");
@@ -104,6 +125,7 @@ export function parseDesignDossier(value: unknown): DesignDossier {
       existingConventions: stringArray(localContext.existingConventions, "localContext.existingConventions"),
       qualityAttributes: stringArray(localContext.qualityAttributes, "localContext.qualityAttributes"),
     },
+    claims: objects(root.claims, "claims", parseClaim),
     principles: objects(root.principles, "principles", parsePrinciple),
     architecture: objects(root.architecture, "architecture", parseArchitecture),
     specifications: objects(root.specifications, "specifications", parseSpecification),
@@ -132,6 +154,8 @@ export function buildDesignDossierRequest(referenceGate: GateResult, taskFingerp
       license: assessment.repository.license,
       revision: assessment.repository.resolvedRevision,
     })),
+    atlases: referenceGate.approvedPack.atlases,
+    bundles: referenceGate.approvedPack.bundles,
     evidenceIndex: referenceGate.approvedPack.slices.map((slice) => ({
       id: slice.id,
       repository: slice.repository,
@@ -144,6 +168,9 @@ export function buildDesignDossierRequest(referenceGate: GateResult, taskFingerp
     requirements: [
       "Record local constraints, existing conventions, and required quality attributes before transferring any reference idea.",
       "Express architecture, specifications, failure semantics, and test concepts independently of the upstream language and layout.",
+      "Use the Design Atlas to understand module relationships and evidence coverage, but cite approved slices for every reference-derived claim.",
+      "Classify every reference-derived claim as explicit, observed, inferred, or unknown; inferred claims require limitations and confidence no greater than 0.8.",
+      "Use unknown claims to record uncertainty, never as the sole basis for an implementation concept.",
       "Cite approved evidence for every reference-derived concept and deliberate negative-space choice.",
       "State tradeoffs plus fits-when and fails-when boundaries; a reference is evidence, not authority.",
       "Map every concept to a local adopt, adapt, or reject decision and give acceptance tests for every non-rejected mapping.",
@@ -161,6 +188,7 @@ export function buildDesignDossierTemplate(request: DesignDossierRequest): Desig
     repositories: request.repositories.map((repository) => repository.name),
     systemIntent: "",
     localContext: { constraints: [], existingConventions: [], qualityAttributes: [] },
+    claims: [],
     principles: [],
     architecture: [],
     specifications: [],
@@ -199,6 +227,7 @@ export function evaluateDesignDossier(
   for (const repository of dossierRepositories) if (!approvedRepositories.has(repository)) reasons.push(`Dossier uses an unapproved repository: ${repository}`);
   for (const repository of approvedRepositories) if (!dossierRepositories.has(repository)) reasons.push(`Dossier omits a confirmed reference repository: ${repository}`);
   const evidence = new Map(referenceGate.approvedPack.slices.map((slice) => [slice.id, slice]));
+  const approvedBundles = new Map(referenceGate.approvedPack.bundles.map((bundle) => [bundle.id, bundle]));
   const conceptGroups = [dossier.principles, dossier.architecture, dossier.specifications, dossier.testConcepts];
   const concepts = conceptGroups.flat() as Array<{ id: string; evidenceSliceIds: string[] }>;
   const allIds = new Set<string>();
@@ -208,6 +237,7 @@ export function evaluateDesignDossier(
     allIds.add(concept.id);
   }
   if (!dossier.principles.length) reasons.push("At least one design principle is required");
+  if (!dossier.claims.length) reasons.push("At least one epistemically classified design claim is required");
   if (!dossier.architecture.length) reasons.push("At least one architecture concept is required");
   if (!dossier.specifications.length) reasons.push("At least one specification concept is required");
   if (!dossier.testConcepts.length) reasons.push("At least one test concept is required");
@@ -217,16 +247,63 @@ export function evaluateDesignDossier(
   if (!dossier.localContext.constraints.length) reasons.push("At least one local constraint is required");
   if (!dossier.localContext.existingConventions.length) reasons.push("At least one existing local convention is required");
   if (!dossier.localContext.qualityAttributes.length) reasons.push("At least one required quality attribute is required");
-  if (dossier.principles.length > 12 || dossier.architecture.length > 16 || dossier.specifications.length > 16
+  if (dossier.claims.length > 30 || dossier.principles.length > 12 || dossier.architecture.length > 16 || dossier.specifications.length > 16
     || dossier.testConcepts.length > 16 || dossier.negativeSpace.length > 12 || dossier.localMappings.length > 20) {
     reasons.push("Dossier exceeds a section item budget");
+  }
+
+  const claimIds = new Set<string>();
+  const classifiedEvidence = new Set<string>();
+  const epistemicEvidence = new Set<string>();
+  for (const [index, claim] of dossier.claims.entries()) {
+    const label = `claims[${index}]`;
+    if (!ID.test(claim.id)) reasons.push(`${label} has an invalid ID: ${claim.id}`);
+    if (claimIds.has(claim.id)) reasons.push(`Duplicate claim ID: ${claim.id}`);
+    claimIds.add(claim.id);
+    if (!meaningful(claim.statement)) reasons.push(`${label} statement is too vague`);
+    if (!claim.evidenceBundleIds.length) reasons.push(`${label} cites no evidence bundle`);
+    const allowedSliceIds = new Set<string>();
+    let hasExplicitBundle = false;
+    for (const bundleId of new Set(claim.evidenceBundleIds)) {
+      const bundle = approvedBundles.get(bundleId);
+      if (!bundle) { reasons.push(`${label} cites unknown or unapproved bundle: ${bundleId}`); continue; }
+      if (!dossierRepositories.has(bundle.repository)) reasons.push(`${label} cites a bundle from an unnamed repository: ${bundle.repository}`);
+      bundle.evidenceSliceIds.forEach((id) => allowedSliceIds.add(id));
+      if (bundle.epistemicCeiling === "explicit") hasExplicitBundle = true;
+    }
+    for (const id of [...claim.evidenceSliceIds, ...claim.counterEvidenceSliceIds]) {
+      if (!evidence.has(id)) reasons.push(`${label} cites unknown or unapproved evidence: ${id}`);
+      if (!allowedSliceIds.has(id)) reasons.push(`${label} cites evidence outside its bundles: ${id}`);
+      if (evidence.has(id) && allowedSliceIds.has(id)) epistemicEvidence.add(id);
+    }
+    if (claim.status === "explicit") {
+      if (!hasExplicitBundle) reasons.push(`${label} claims explicit intent without an explicit-capable bundle`);
+      if (!claim.evidenceSliceIds.length) reasons.push(`${label} explicit claim has no supporting evidence`);
+      if (!claim.evidenceSliceIds.some((id) => {
+        const slice = evidence.get(id);
+        return slice ? supportsExplicitIntent(slice) : false;
+      })) reasons.push(`${label} explicit claim does not directly cite an ADR, RFC, architecture, or design document`);
+    }
+    if (claim.status === "observed" && !claim.evidenceSliceIds.length) reasons.push(`${label} observed claim has no supporting evidence`);
+    if (claim.status === "inferred") {
+      if (!claim.evidenceSliceIds.length) reasons.push(`${label} inferred claim has no supporting evidence`);
+      if (!claim.limitations.length) reasons.push(`${label} inferred claim has no limitations`);
+      if (claim.confidence > 0.8) reasons.push(`${label} inferred confidence ${claim.confidence} exceeds 0.8`);
+    }
+    if (claim.status === "unknown") {
+      if (!claim.limitations.length) reasons.push(`${label} unknown claim must explain what evidence is missing`);
+      if (claim.confidence > 0.2) reasons.push(`${label} unknown confidence ${claim.confidence} exceeds 0.2`);
+    } else {
+      claim.evidenceSliceIds.forEach((id) => classifiedEvidence.add(id));
+    }
+    if (hasVagueStatement(claim.limitations)) reasons.push(`${label} contains a vague limitation`);
   }
 
   const evidenceLists = [
     ...concepts.map((item) => ({ label: item.id, ids: item.evidenceSliceIds })),
     ...dossier.negativeSpace.map((item, index) => ({ label: `negativeSpace[${index}]`, ids: item.evidenceSliceIds })),
   ];
-  const cited = new Set<string>();
+  const cited = new Set<string>(epistemicEvidence);
   const repositoriesWithEvidence = new Set<string>();
   for (const item of evidenceLists) {
     if (!item.ids.length) reasons.push(`${item.label} has no evidence`);
@@ -237,6 +314,7 @@ export function evaluateDesignDossier(
         cited.add(id);
         repositoriesWithEvidence.add(slice.repository);
         if (!dossierRepositories.has(slice.repository)) reasons.push(`${item.label} cites a repository not named by the dossier: ${slice.repository}`);
+        if (!classifiedEvidence.has(id)) reasons.push(`${item.label} uses evidence without a non-unknown epistemic claim: ${id}`);
       }
     }
   }

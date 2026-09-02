@@ -10,7 +10,7 @@ import {
 } from "../src/review.ts";
 import { assessRepository } from "../src/score.ts";
 import type { EvidenceSlice, ReferencePack, ReviewSubmission } from "../src/types.ts";
-import { matureRepository } from "./helpers.ts";
+import { matureAtlas, matureBundle, matureRepository } from "./helpers.ts";
 
 function packFixture(): ReferencePack {
   const repository = matureRepository();
@@ -30,12 +30,14 @@ function packFixture(): ReferencePack {
     content: "export interface Extension {}",
   });
   return {
-    schemaVersion: 2,
+    schemaVersion: 4,
     generatedAt: "2026-09-01T00:00:00.000Z",
     task: { task: "coding agent harness extensions" },
     queries: ["coding agent harness"],
     assessments: [assessment],
+    atlases: [matureAtlas(repository)],
     slices: [slice("slice-a", "docs/architecture.md"), slice("slice-b", "src/extensions.ts")],
+    bundles: [matureBundle(repository)],
     practices: ["unreviewed practice"],
   };
 }
@@ -54,6 +56,7 @@ function approvedSubmission(pack: ReferencePack): ReviewSubmission {
       transferablePatterns: ["Separate extension registration from execution."],
       mismatches: ["Upstream lifecycle names differ."],
       risks: ["Avoid copying provider-specific types."],
+      evidenceBundleIds: ["bundle-architecture"],
       evidenceSliceIds: ["slice-b"],
     }],
   };
@@ -65,6 +68,8 @@ test("builds a pack-bound request and fail-closed pending template", () => {
   const template = buildReviewTemplate(request);
   assert.equal(request.referencePackFingerprint, fingerprintReferencePack(pack));
   assert.equal(request.candidates.length, 1);
+  assert.equal(request.candidates[0]!.atlas.coverage.score, 90);
+  assert.equal(request.candidates[0]!.bundles[0]!.id, "bundle-architecture");
   assert.deepEqual(request.candidates[0]!.slices.map((slice) => slice.id), ["slice-a", "slice-b"]);
   assert.equal(template.decisions[0]!.verdict, "pending");
   const result = applyReviewGate(pack, template, defaultConfig);
@@ -72,12 +77,12 @@ test("builds a pack-bound request and fail-closed pending template", () => {
   assert.deepEqual(result.approvedPack.slices, []);
 });
 
-test("approves only explicitly cited evidence and reviewed patterns", () => {
+test("approves explicitly cited bundles and reviewed patterns", () => {
   const pack = packFixture();
   const submission = approvedSubmission(pack);
   const result = applyReviewGate(pack, submission, defaultConfig);
   assert.equal(result.results[0]!.approved, true);
-  assert.deepEqual(result.approvedPack.slices.map((slice) => slice.id), ["slice-b"]);
+  assert.deepEqual(result.approvedPack.slices.map((slice) => slice.id), ["slice-a", "slice-b"]);
   assert.deepEqual(result.approvedPack.practices, ["Separate extension registration from execution."]);
   assert.ok(!result.approvedPack.practices.includes("unreviewed practice"));
 });
@@ -102,6 +107,7 @@ test("adapt decisions must explain summary, mismatch, risk, pattern, and evidenc
   decision.risks = [];
   decision.transferablePatterns = [];
   decision.evidenceSliceIds = [];
+  decision.evidenceBundleIds = [];
   const result = applyReviewGate(pack, submission, defaultConfig);
   assert.equal(result.results[0]!.approved, false);
   const reasons = result.results[0]!.reasons.join(" ");
@@ -110,6 +116,18 @@ test("adapt decisions must explain summary, mismatch, risk, pattern, and evidenc
   assert.match(reasons, /stated risk/);
   assert.match(reasons, /transferable pattern/);
   assert.match(reasons, /Evidence slices/);
+  assert.match(reasons, /evidence bundle/);
+});
+
+test("rejects forged bundles and slices outside cited relationship bundles", () => {
+  const pack = packFixture();
+  const forged = approvedSubmission(pack);
+  forged.decisions[0]!.evidenceBundleIds = ["forged-bundle"];
+  assert.throws(() => applyReviewGate(pack, forged, defaultConfig), /Unknown evidence bundle ID/);
+
+  pack.bundles[0]!.evidenceSliceIds = ["slice-a"];
+  const outside = approvedSubmission(pack);
+  assert.throws(() => applyReviewGate(pack, outside, defaultConfig), /outside the cited bundles/);
 });
 
 test("rejects modified packs, forged evidence IDs, and malformed structured output", () => {
@@ -135,7 +153,9 @@ test("rejects modified packs, forged evidence IDs, and malformed structured outp
 test("exposes and approves no more than two coherent learning repositories", () => {
   const pack = packFixture();
   const baseAssessment = pack.assessments[0]!;
+  const baseAtlas = pack.atlases[0]!;
   const baseSlice = pack.slices[0]!;
+  const baseBundle = pack.bundles[0]!;
   pack.assessments = ["example/one", "example/two", "example/three"].map((fullName) => ({
     ...structuredClone(baseAssessment),
     repository: { ...structuredClone(baseAssessment.repository), fullName, htmlUrl: `https://github.com/${fullName}` },
@@ -146,10 +166,22 @@ test("exposes and approves no more than two coherent learning repositories", () 
     repository: assessment.repository.fullName,
     repositoryUrl: assessment.repository.htmlUrl,
   }));
+  pack.atlases = pack.assessments.map((assessment) => ({
+    ...structuredClone(baseAtlas),
+    repository: assessment.repository.fullName,
+    repositoryUrl: assessment.repository.htmlUrl,
+  }));
+  pack.bundles = pack.assessments.map((assessment, index) => ({
+    ...structuredClone(baseBundle),
+    id: `bundle-${index + 1}`,
+    repository: assessment.repository.fullName,
+    evidenceSliceIds: [`slice-${index + 1}`],
+  }));
   assert.equal(buildReviewRequest(pack).candidates.length, 2);
   const decisions = pack.assessments.map((assessment, index) => ({
     ...approvedSubmission(pack).decisions[0]!,
     repository: assessment.repository.fullName,
+    evidenceBundleIds: [`bundle-${index + 1}`],
     evidenceSliceIds: [`slice-${index + 1}`],
   }));
   assert.throws(() => applyReviewGate(pack, {

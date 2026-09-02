@@ -7,7 +7,7 @@ const fence = (content: string): string => {
 
 function assessmentTable(item: RepositoryAssessment): string {
   const d = item.dimensions;
-  return `| ${item.repository.fullName} | ${item.selectionOrigin ?? "automatic"} | ${item.overall} | ${d.domainMatch.score} | ${d.engineeringMaturity.score} | ${d.transferability.score} | ${d.patternClarity.score} | ${d.designQuality.score} | ${d.risk.score} | ${item.accepted ? "yes" : "no"} |`;
+  return `| ${item.repository.fullName} | ${item.selectionOrigin ?? "automatic"} | ${item.overall} | ${d.domainMatch.score} | ${d.engineeringMaturity.score} | ${d.transferability.score} | ${d.patternClarity.score} | ${d.designQuality.score} | ${d.risk.score} | ${item.atlasCoverage?.score ?? "-"} | ${item.accepted ? "yes" : "no"} |`;
 }
 
 export function inferPractices(pack: Pick<ReferencePack, "assessments" | "slices">): string[] {
@@ -30,10 +30,18 @@ export function renderReference(pack: ReferencePack): string {
     "## Decision summary", "", "Scores are heuristics, not proof. Risk is inverse: lower is safer.", "",
     `Learning set: ${pack.selection?.selectedRepositories.join(", ") || "none"} (hard limit: ${pack.selection?.maximumLearningRepositories ?? 2})`, "",
     ...(specified.length ? ["### User-specified reference evaluation", "", ...specified, ""] : []),
-    "| Repository | Origin | Overall | Domain | Maturity | Transfer | Clarity | Design | Risk | Accepted |",
-    "|---|---|---:|---:|---:|---:|---:|---:|---:|:---:|", ...pack.assessments.map(assessmentTable), "",
+    "| Repository | Origin | Overall | Domain | Maturity | Transfer | Clarity | Design | Risk | Atlas | Accepted |",
+    "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|:---:|", ...pack.assessments.map(assessmentTable), "",
     `Accepted ${accepted.length} of ${pack.assessments.length} inspected repositories.`, "",
-    "## Transferable practices", "", ...pack.practices.map((practice) => `- ${practice}`), "", "## Evidence slices", "",
+    "## Transferable practices", "", ...pack.practices.map((practice) => `- ${practice}`), "",
+    "## Evidence bundle index", "",
+    "Each bundle groups multiple evidence modalities around one design question. Its epistemic ceiling limits how strongly the evidence may be described.", "",
+    ...pack.bundles.flatMap((bundle) => [
+      `### ${bundle.id} — ${bundle.concern}`, "",
+      `Repository: ${bundle.repository} · Ceiling: ${bundle.epistemicCeiling} · Kinds: ${bundle.evidenceKinds.join(", ")} · Slices: ${bundle.evidenceSliceIds.join(", ")}`,
+      "", bundle.question, "", `Limitations: ${bundle.limitations.join("; ") || "none recorded"}`, "",
+    ]),
+    "## Evidence slices", "",
   ];
   for (const slice of pack.slices) {
     const marker = fence(slice.content);
@@ -71,6 +79,8 @@ ${pack.practices.map((practice) => `- ${practice}`).join("\n")}
 
 ## Context budget
 
-There are ${pack.slices.length} bounded slices from ${new Set(pack.slices.map((slice) => slice.repository)).size} repositories. Read only the slices relevant to the current design decision.
+There are ${pack.bundles.length} relationship-preserving evidence bundles containing ${pack.slices.length} bounded slices from ${new Set(pack.slices.map((slice) => slice.repository)).size} repositories. Inspect the relevant bundle before reading only the slices needed for the current design decision.
+
+Repository-wide structural relationships are summarized in DESIGN_ATLAS.md. Treat the atlas as an index for evidence retrieval, not as proof of undocumented design intent.
 `;
 }
