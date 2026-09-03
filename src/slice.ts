@@ -30,6 +30,8 @@ export type SliceReadFailure = {
 const EXCLUDED = /(^|\/)(node_modules|vendor|dist|build|coverage|fixtures?|snapshots?|generated|\.vscode|\.idea|\.agents)(\/|$)|(^|\/)(AGENTS|CLAUDE)\.md$|^\.github\/(copilot-instructions|instructions)(\/|\.|$)|\.(lock|min\.(js|css)|map|png|jpe?g|gif|pdf|zip|wasm)$|\.i18n\.ya?ml$/i;
 const TEXT_FILE = /(^|\/)(README|ARCHITECTURE|DESIGN|CONTRIBUTING|SECURITY)(\.[^/]*)?$|\.(md|mdx|ts|tsx|js|jsx|py|rs|go|java|kt|rb|toml|ya?ml|json)$/i;
 const DESIGN_PATH = /(^|\/)(architecture|design|adr)(\/|\.|$)|(^|\/)(rfcs?)(\/|$)|(^|\/)(RFC-\d+|ADR-\d+)[^/]*\.md$/i;
+const README_PATH = /(^|\/)README(?:\.[^/]*)?$/i;
+const MANIFEST_PATH = /(^|\/)(package\.json|pyproject\.toml|Cargo\.toml|go\.mod|pom\.xml|build\.gradle(?:\.kts)?)$/i;
 
 export function rankPaths(tree: TreeEntry[], terms: string[], preferredPaths = new Set<string>()): Array<{ entry: TreeEntry; score: number; reason: string }> {
   return tree
@@ -42,7 +44,7 @@ export function rankPaths(tree: TreeEntry[], terms: string[], preferredPaths = n
       if (preferredPaths.has(entry.path)) { score += 16; reasons.push("design-atlas structural evidence"); }
       if (matches.length) reasons.push(`path matches ${matches.join(", ")}`);
       if (DESIGN_PATH.test(path)) { score += 35; reasons.push("design documentation"); }
-      if (/^readme/i.test(path)) { score += 28; reasons.push("project overview"); }
+      if (README_PATH.test(path)) { score += 28; reasons.push("project overview"); }
       if (/(^|\/)(examples?|samples?)(\/|$)/i.test(path)) { score += 18; reasons.push("usage example"); }
       if (/(^|\/)(test|tests|spec|__tests__)(\/|$)/i.test(path)) { score += 12; reasons.push("behavioral evidence"); }
       if (/(^|\/)(src|lib|packages)(\/|$)/i.test(path)) { score += 8; reasons.push("implementation source"); }
@@ -57,7 +59,7 @@ function evidenceBucket(path: string): string {
   if (DESIGN_PATH.test(path)) return "design";
   if (/(^|\/)(test|tests|spec|__tests__)(\/|$)/i.test(path)) return "test";
   if (/(^|\/)(examples?|samples?)(\/|$)/i.test(path)) return "example";
-  if (/^readme/i.test(path)) return "readme";
+  if (README_PATH.test(path)) return "readme";
   if (/(^|\/)(src|lib|packages)(\/|$)/i.test(path)) return "source";
   return "other";
 }
@@ -71,8 +73,8 @@ function pathFamily(path: string): string {
 
 function evidenceModality(path: string): "documentation" | "manifest" | "implementation" | "test" {
   if (/(^|\/)(test|tests|spec|__tests__)(\/|$)/i.test(path)) return "test";
-  if (/(^|\/)(package\.json|pyproject\.toml|Cargo\.toml|go\.mod)$/i.test(path)) return "manifest";
-  if (DESIGN_PATH.test(path) || /^readme/i.test(path)) return "documentation";
+  if (MANIFEST_PATH.test(path)) return "manifest";
+  if (DESIGN_PATH.test(path) || README_PATH.test(path)) return "documentation";
   return "implementation";
 }
 
@@ -101,9 +103,10 @@ function diversifyPaths(
     return true;
   };
   if (ranked[0]) add(ranked[0]);
-  if (limit >= 2 && selected.length === 1) {
-    const firstModality = evidenceModality(selected[0]!.entry.path);
-    const diverse = ranked.find((candidate) => evidenceModality(candidate.entry.path) !== firstModality && !families.has(pathFamily(candidate.entry.path)));
+  for (const modality of ["documentation", "manifest", "test", "implementation"] as const) {
+    if (selected.length >= limit) break;
+    if (selected.some((candidate) => evidenceModality(candidate.entry.path) === modality)) continue;
+    const diverse = ranked.find((candidate) => evidenceModality(candidate.entry.path) === modality && !families.has(pathFamily(candidate.entry.path)));
     if (diverse) add(diverse);
   }
   for (const candidate of ranked) {

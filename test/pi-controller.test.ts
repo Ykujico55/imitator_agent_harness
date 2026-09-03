@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
@@ -12,6 +12,17 @@ import { assessRepository } from "../src/score.ts";
 import { createTaskIdentity } from "../src/task.ts";
 import type { DesignDossier, EvidenceSlice, ReferencePack, RepositoryReviewDecision } from "../src/types.ts";
 import { PiHarnessController, type PiHarnessRuntime, type PreparedRun } from "../integrations/pi/controller.ts";
+import {
+  IMITATOR_COMMAND_NAMES,
+  IMITATOR_TOOL_NAMES,
+  MUTATION_GATE_SIGNALS,
+  MUTATION_TOOL_DENY_LIST,
+  PI_REQUIRED_HOOKS,
+  inspectPiHealth,
+  mutationGateSignal,
+  renderPiHealth,
+  type PiControllerPhase,
+} from "../integrations/pi/contract.ts";
 import { FilePiStateStore, inspectWorkspace, type PersistedPiPayload, type PiStateStore } from "../integrations/pi/state.ts";
 import { matureAtlas, matureBundle, matureRepository } from "./helpers.ts";
 
@@ -144,6 +155,40 @@ function approvedDesign(run: PreparedRun): DesignDossier {
   };
 }
 
+test("declared mutation tools and phase decisions are deterministic named signals", () => {
+  assert.deepEqual([...MUTATION_TOOL_DENY_LIST], ["edit", "write", "bash", "powershell", "apply_patch"]);
+  assert.equal(new Set(Object.values(IMITATOR_TOOL_NAMES)).size, Object.values(IMITATOR_TOOL_NAMES).length);
+  assert.equal(new Set(Object.values(IMITATOR_COMMAND_NAMES)).size, Object.values(IMITATOR_COMMAND_NAMES).length);
+  const guardedPhases = Object.keys(MUTATION_GATE_SIGNALS) as Array<Exclude<PiControllerPhase, "approved">>;
+  assert.equal(new Set(guardedPhases.map((phase) => MUTATION_GATE_SIGNALS[phase].code)).size, guardedPhases.length);
+  for (const phase of guardedPhases) {
+    assert.deepEqual(mutationGateSignal("write", phase), MUTATION_GATE_SIGNALS[phase]);
+    assert.match(MUTATION_GATE_SIGNALS[phase].reason, new RegExp(`\\[${MUTATION_GATE_SIGNALS[phase].code}\\]`));
+  }
+  assert.equal(mutationGateSignal("write", "approved"), undefined);
+  assert.equal(mutationGateSignal("read", "idle"), undefined);
+});
+
+test("Pi health report uses registry, hooks, and store behavior oracles", () => {
+  const report = inspectPiHealth({
+    tools: Object.values(IMITATOR_TOOL_NAMES),
+    commands: Object.values(IMITATOR_COMMAND_NAMES),
+    hooks: PI_REQUIRED_HOOKS,
+    store: { ok: true, detail: "checksum-valid persisted state (reviewing)" },
+  });
+  assert.equal(report.healthy, true);
+  assert.deepEqual(report.checks.map((check) => check.name), ["registry", "hooks", "store"]);
+  const output = renderPiHealth(report);
+  assert.match(output, /^registry: ok/m);
+  assert.match(output, /^hooks: ok/m);
+  assert.match(output, /^store: ok/m);
+  assert.doesNotMatch(output, /wiring/i);
+
+  const unhealthy = inspectPiHealth({ tools: [], commands: [], hooks: [], store: { ok: false, detail: "checksum mismatch" } });
+  assert.equal(unhealthy.healthy, false);
+  assert.ok(unhealthy.checks.every((check) => !check.ok));
+});
+
 test("Pi controller enforces prepare-review-approve before mutation", async () => {
   const run = preparedRun();
   const controller = new PiHarnessController(runtime(run), 6, new MemoryStateStore());
@@ -172,6 +217,7 @@ test("Pi controller enforces prepare-review-approve before mutation", async () =
   const design = await controller.submitDesignDossier(approvedDesign(run));
   assert.equal(design.approved, true, design.reasons.join("\n"));
   assert.equal(controller.status().phase, "awaiting_design_confirmation");
+  assert.equal(controller.mutationBlockReason("write"), MUTATION_GATE_SIGNALS.awaiting_design_confirmation.reason);
   await controller.confirmDesign("human-designer", "human");
   assert.equal(controller.status().phase, "approved");
   assert.equal(controller.mutationBlockReason("write"), undefined);
@@ -224,9 +270,11 @@ test("Pi state survives restart and rejects an integrity-modified state file", a
   assert.equal(approved.mutationBlockReason("edit"), undefined);
 
   const statePath = store.path(cwd);
+  assert.equal((await approved.stateStoreHealth(cwd)).ok, true);
   const state = await readFile(statePath, "utf8");
   await writeFile(statePath, state.replace('"phase": "approved"', '"phase": "reviewing"'), "utf8");
   const rejected = new PiHarnessController(runtime(run), 6, store);
+  assert.equal((await rejected.stateStoreHealth(cwd)).ok, false);
   await assert.rejects(() => rejected.restore(cwd), /integrity check/);
 });
 
@@ -276,8 +324,37 @@ test("current Pi loader discovers the declared extension tools, commands, and ga
   assert.deepEqual(loaded.errors, []);
   assert.equal(loaded.extensions.length, 1);
   const extension = loaded.extensions[0]!;
-  assert.deepEqual([...extension.tools.keys()].sort(), ["imitator_get_evidence", "imitator_get_evidence_bundle", "imitator_prepare", "imitator_submit_design_dossier", "imitator_submit_review"]);
-  assert.deepEqual([...extension.commands.keys()].sort(), ["imitator-confirm", "imitator-prepare", "imitator-reset", "imitator-status"]);
+  assert.deepEqual([...extension.tools.keys()].sort(), Object.values(IMITATOR_TOOL_NAMES).sort());
+  assert.deepEqual([...extension.commands.keys()].sort(), Object.values(IMITATOR_COMMAND_NAMES).sort());
   assert.ok(extension.handlers.has("before_agent_start"));
   assert.ok(extension.handlers.has("tool_call"));
+  assert.deepEqual([...extension.handlers.keys()].filter((name) => PI_REQUIRED_HOOKS.includes(name as typeof PI_REQUIRED_HOOKS[number])).sort(), [...PI_REQUIRED_HOOKS].sort());
+  const toolCallHandler = extension.handlers.get("tool_call")?.[0];
+  assert.ok(toolCallHandler);
+  assert.deepEqual(await toolCallHandler({ toolName: "write" }), { block: true, reason: MUTATION_GATE_SIGNALS.idle.reason });
+  assert.equal(await toolCallHandler({ toolName: "read" }), undefined);
+
+  loaded.runtime.getAllTools = () => [...extension.tools.values()].map(({ definition, sourceInfo }) => ({ ...definition, sourceInfo }));
+  loaded.runtime.getCommands = () => [...extension.commands.values()].map((command) => ({ ...command, source: "extension" as const }));
+  const notifications: Array<{ message: string; type?: string }> = [];
+  const doctor = extension.commands.get(IMITATOR_COMMAND_NAMES.doctor);
+  assert.ok(doctor);
+  await doctor.handler("", {
+    cwd: agentDir,
+    ui: { notify(message: string, type?: string) { notifications.push({ message, type }); } },
+  } as never);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0]!.type, "info");
+  assert.match(notifications[0]!.message, /^registry: ok/m);
+  assert.match(notifications[0]!.message, /^hooks: ok/m);
+  assert.match(notifications[0]!.message, /^store: ok/m);
+
+  await mkdir(resolve(agentDir, ".imitator"));
+  await writeFile(resolve(agentDir, ".imitator", "pi-state.json"), "{}\n", "utf8");
+  await doctor.handler("", {
+    cwd: agentDir,
+    ui: { notify(message: string, type?: string) { notifications.push({ message, type }); } },
+  } as never);
+  assert.equal(notifications[1]!.type, "error");
+  assert.match(notifications[1]!.message, /^store: failed/m);
 });

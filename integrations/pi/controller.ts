@@ -22,9 +22,12 @@ import type {
 } from "../../src/types.ts";
 import { FilePiStateStore, inspectWorkspace, type PersistedPiPayload, type PiStateStore } from "./state.ts";
 import { selectTypeScriptAstWindow } from "../typescript-ast.ts";
+import { mutationGateSignal, type PiControllerPhase } from "./contract.ts";
+
+export { MUTATION_TOOL_DENY_LIST } from "./contract.ts";
 
 export type PiPrepareInput = TaskSpec;
-export type PiControllerPhase = "idle" | "preparing" | "reviewing" | "awaiting_confirmation" | "distilling" | "awaiting_design_confirmation" | "approved" | "blocked";
+export type { PiControllerPhase } from "./contract.ts";
 
 export type PreparedRun = {
   pack: ReferencePack;
@@ -556,15 +559,20 @@ export class PiHarnessController {
   }
 
   mutationBlockReason(toolName: string): string | undefined {
-    const mutatingTools = new Set(["edit", "write", "bash", "powershell", "apply_patch"]);
-    if (!mutatingTools.has(toolName) || this.#phase === "approved") return undefined;
-    if (this.#phase === "idle") return "Imitator gate: call imitator_prepare before using mutation-capable tools.";
-    if (this.#phase === "preparing") return "Imitator gate: precedent discovery is still running.";
-    if (this.#phase === "reviewing") return "Imitator gate: inspect evidence and call imitator_submit_review before coding.";
-    if (this.#phase === "awaiting_confirmation") return "Imitator gate: the reference proposal requires independent human or judge confirmation.";
-    if (this.#phase === "distilling") return "Imitator gate: distill the confirmed references into an evidence-bound design dossier before coding.";
-    if (this.#phase === "awaiting_design_confirmation") return "Imitator gate: the design dossier requires independent human or judge confirmation before coding.";
-    return "Imitator gate: no precedent passed the confirmed review; revise the search or obtain an approved decision.";
+    return mutationGateSignal(toolName, this.#phase)?.reason;
+  }
+
+  async stateStoreHealth(cwd: string): Promise<{ ok: boolean; detail: string }> {
+    if (!this.stateStore) return { ok: false, detail: "no state store configured" };
+    try {
+      const state = await this.stateStore.load(cwd);
+      return {
+        ok: true,
+        detail: state ? `checksum-valid persisted state (${state.phase})` : "state store readable; no persisted state",
+      };
+    } catch (error) {
+      return { ok: false, detail: error instanceof Error ? error.message : String(error) };
+    }
   }
 
   systemContext(): string {

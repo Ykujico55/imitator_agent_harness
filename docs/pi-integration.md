@@ -1,10 +1,14 @@
 # Pi integration
 
+需要直接照着命令完成 GitHub/模型认证、启动和两次人工确认时，请先看 [启动与操作手册](startup.md)。
+
 ## 目标
 
 Pi extension 把 reference pipeline 和 Design Dossier 双重门禁接到 coding 生命周期里，但不把 Pi 引入核心。核心仍然负责确定性的 GitHub 发现、评分、切片、评审/设计校验和产物写入；扩展只负责会话协议、渐进读取和修改工具门禁。
 
 远程仓库的 README、源码、注释和测试始终是不可信证据。扩展不会 clone、安装、构建或执行搜索到的仓库。
+
+Pi 自身拥有通用工具 registry、重复注册处理、extension 启停和跨 extension 的 hook 调度。本项目不复制一套平行 runtime，也不把这些宿主行为冒充为 Imitator 自己的实现；兼容性测试只验证当前 Pi 版本能够加载本扩展、注册声明的表面，并真实调用本扩展的 `tool_call` veto。若 Pi 的 hook 顺序或异常隔离语义成为安全前提，应把它升级为明确的宿主版本契约和独立兼容性测试，而不能仅凭参考仓库的设计概念宣称已经满足。
 
 ## 安装
 
@@ -44,6 +48,7 @@ npx pi -e ./integrations/pi/index.ts
 辅助命令：
 
 - `/imitator-status`：显示当前 phase、任务、候选、证据包、切片、认识论 claim 和批准数量；
+- `/imitator-doctor`：检查五个扩展工具、五个控制命令、三个生命周期 hook 和状态文件 checksum，输出 `registry/hooks/store` 三项具名结果；
 - `/imitator-prepare <任务>`：由人显式开始 prepare；
 - `/imitator-confirm`：按当前 phase 确认参考选择或 Design Dossier；
 - `/imitator-reset`：开始新任务或放弃当前参考包。
@@ -85,11 +90,13 @@ npm run check
 - 两层独立确认前后的修改工具拦截；
 - 单次包/切片读取数量限制、未读包不可评审和批准后证据收缩；
 - 当前 Pi `DefaultResourceLoader` 对实际 extension 的加载，及工具、命令、事件 handler 注册；
+- 实际调用已加载的 `tool_call` handler，确认未批准时阻断写工具、读取工具保持可用；
+- `/imitator-doctor` 使用 registry、hooks、store 行为 oracle，并对缺失注册和 checksum 错误 fail closed；
 - 持久状态重启恢复、任务/HEAD 绑定和修改后 checksum 拒绝；
 - proposal reviewer 与 human/independent-agent confirmer 身份分离；
 - Dossier 的包内证据归属、认识论上限、推断限制、全概念本地映射、适用边界、本地约束、上下文预算和第二确认身份分离；
 - TypeScript compiler AST 完整声明切片和非支持语言回退；
-- 全部 provider-neutral 核心测试、严格 TypeScript 检查和 CLI 启动。
+- 递归 AST 核心边界测试（包括副作用导入、re-export、动态 import、require 和嵌套目录）、严格 TypeScript 检查和 CLI 启动。
 
 只验证 Pi 适配层：
 

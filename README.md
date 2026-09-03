@@ -17,12 +17,15 @@
 ## 已实现的 v0.8 工作流
 
 - GitHub Repository API 多查询检索、去重和并发画像。
+- 搜索得到候选但画像请求因限额或网络错误全部失败时会 fail closed，不会把基础设施失败报告成“没有合适参考”。
 - 领域匹配、工程成熟度、可迁移性、范式清晰度、设计合理性、风险六维可解释评分。
 - 默认宽松许可证 allowlist；无许可证仓库不会进入参考上下文。
 - 路径排序与固定行数窗口切片，总文件数、切片数和字符数均受预算限制。
 - 最终证据空间硬限制为 1–2 个同领域仓库、每仓库最多 12 个文件、总计 48 个切片和 12 万字符；其余搜索候选不会进入 agent 的学习空间。
+- 未通过结构覆盖门禁的候选只保留评分记录供审计，其 Atlas、切片和 Evidence Bundle 不会进入学习空间。
 - 对初筛通过的仓库生成 commit-pinned Repository Design Atlas：索引 manifest、模块根、入口、设计文档、测试、CI，并在固定读取预算内解析 Node manifest 与 TS/JS 相对 import/test 关系。
 - Atlas 用 overview、design、manifest、source、test、automation、relationships 七个命名信号计算可解释覆盖分；默认要求源码和测试证据且至少 50 分，不足的仓库不会进入切片与评审阶段。
+- Atlas 中存在文件路径还不够：配置要求的 source/test 等类别必须最终形成可读切片；限额或读取错误导致关键模态缺失时整次 prepare 会 fail closed 并报告原因。
 - Atlas 只保存带仓库、revision、许可证、路径和链接的结构事实；它用于发现关系和指导检索，不能替代切片对设计意图的举证。
 - 切片之后会按系统架构、模块边界、技术选型、测试策略和失败语义编译 Evidence Bundle；每个包至少包含配置要求的多种证据类型，并保留 Atlas 关系、来源、许可证和已知限制。
 - Evidence Bundle 有 `explicit` 或 `observed` 认识论上限：只有 ADR/RFC/architecture/design 类明确文档支持的包才允许主张作者的显式意图；其余关系只能作为观察事实或受限推断。
@@ -32,7 +35,7 @@
 - 输出 `manifest.json`、`DESIGN_ATLAS.json/.md`、`EVIDENCE_BUNDLES.json/.md`、`REFERENCE.md`、`AGENT_CONTEXT.md`、`REVIEW_REQUEST.json` 和 fail-closed 的 `REVIEW_TEMPLATE.json`。
 - 人或任意模型可填写结构化评审；gate 校验 pack 指纹、证据归属、置信度、风险、范式、错配和风险说明。
 - gate 以 Evidence Bundle 为评审边界，只输出明确批准且被引用的包及其完整内部证据；伪造包、跨仓库引用和包外切片都会被拒绝。
-- 提供 Pi extension：自动注入工作协议，在参考选择和 Design Dossier 双重门禁通过前拦截 `edit`、`write`、`bash`、`powershell` 和 `apply_patch`。
+- 提供 Pi extension：自动注入工作协议，在参考选择和 Design Dossier 双重门禁通过前拦截 `edit`、`write`、`bash`、`powershell` 和 `apply_patch`；`/imitator-doctor` 用 registry、hooks、store 三个具名 oracle 检查集成健康。
 - Pi 通过五个渐进式工具完成搜索、按 ID 读取最多 2 个证据包、读取最多 6 个证据切片、提交结构化评审和设计蒸馏；不会把整份参考包直接塞进会话。
 - 任务指纹绑定规范化任务、工作区路径和 prepare 时的 Git HEAD；Pi 状态带完整性校验持久化到 `.imitator/pi-state.json`，重启可恢复，基线变化则 fail closed。
 - Coding agent 的评审只是 proposal；必须由 `/imitator-confirm` 的交互式人工确认，或隔离的独立 judge 身份确认后才能解锁。
@@ -100,7 +103,7 @@ pi install git:github.com/kunjinkao55/imitator_agent_harness
 
 `imitator_prepare` 可额外接收 `referenceRepositories: [{ repository, revision? }]`。即使自动搜索检查了更多候选，后续 evidence、review、dossier 和 implementation context 也只允许来自最终 1–2 个仓库。
 
-至少一个仓库通过选择门禁、且 Design Dossier 通过确定性校验和独立确认后，Pi 的修改与命令工具才会解锁。可用 `/imitator-status` 查看状态，开始新任务前用 `/imitator-reset` 重新上锁；也可用 `/imitator-prepare <任务>` 手动开始检索。
+至少一个仓库通过选择门禁、且 Design Dossier 通过确定性校验和独立确认后，Pi 的修改与命令工具才会解锁。可用 `/imitator-status` 查看状态、用 `/imitator-doctor` 检查注册/hook/store 健康，开始新任务前用 `/imitator-reset` 重新上锁；也可用 `/imitator-prepare <任务>` 手动开始检索。
 
 本地开发时无需安装 package：
 
@@ -109,7 +112,7 @@ npm install
 npx pi -e ./integrations/pi/index.ts
 ```
 
-更完整的操作步骤、安全边界和测试方式见 [Pi 接入说明](docs/pi-integration.md)。Pi 扩展机制和 package 安装方式以 [Pi Extensions](https://pi.dev/docs/latest/extensions) 与 [Pi Packages](https://pi.dev/docs/latest/packages) 为准。
+从认证、启动到两次确认的完整命令见 [启动与操作手册](docs/startup.md)；更完整的集成原理、安全边界和测试方式见 [Pi 接入说明](docs/pi-integration.md)。Pi 扩展机制和 package 安装方式以 [Pi Extensions](https://pi.dev/docs/latest/extensions) 与 [Pi Packages](https://pi.dev/docs/latest/packages) 为准。
 
 ## 真实模型 A/B eval
 
@@ -140,7 +143,7 @@ Star 只占成熟度的一部分。通过门禁还需要领域信号、测试/CI
 
 ## 为什么核心仍独立于 Pi
 
-Pi 只是一层薄适配器：“参考发现”和 deterministic gate 仍是可测试、无模型绑定的核心。适配器仅管理会话状态、渐进读取和修改工具门禁，因此同一核心仍可继续支持 Codex、Claude Code 和 CI。
+Pi 只是一层薄适配器：“参考发现”和 deterministic gate 仍是可测试、无模型绑定的领域核心。这里的 core 表示 provider-neutral domain core，而不是不包含产品策略的通用 kernel：评分、许可证和审批规则属于 Imitator 的核心价值；Pi/TypeBox 和宿主生命周期则严格留在 `integrations/`。适配器仅管理会话状态、渐进读取和修改工具门禁，因此同一核心仍可继续支持 Codex、Claude Code 和 CI。
 
 ## 当前边界与后续演进
 

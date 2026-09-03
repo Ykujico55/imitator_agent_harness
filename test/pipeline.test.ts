@@ -51,7 +51,7 @@ test("runs search, assessment and commit-pinned slicing through a mocked GitHub 
   const client = new GitHubClient({ fetchImpl: fetchImpl as typeof fetch, apiBase: "https://mock.github" });
   const config = structuredClone(defaultConfig);
   config.github.inspectLimit = 1;
-  config.slicing.maxFilesPerRepository = 2;
+  config.slicing.maxFilesPerRepository = 4;
   const pack = await prepareReferencePack(client, {
     task: "coding agent harness extension architecture",
     queries: ["coding agent harness"],
@@ -64,11 +64,63 @@ test("runs search, assessment and commit-pinned slicing through a mocked GitHub 
   assert.equal(pack.atlases[0]!.coverage.sufficient, true);
   assert.ok(pack.atlases[0]!.coverage.signals.some((signal) => signal.name === "design-evidence"));
   assert.ok(pack.bundles.length >= 1);
-  assert.equal(pack.slices.length, 2);
+  assert.equal(pack.slices.length, 4);
   assert.ok(pack.slices.every((slice) => slice.commitish === "deadbeef1234"));
   assert.ok(calls.some((url) => url.includes("ref=deadbeef1234")));
   const contentCalls = calls.filter((url) => url.includes("/contents/"));
   assert.equal(contentCalls.length, new Set(contentCalls).size, "Atlas and slicer should share remote file reads");
+});
+
+test("fails closed when indexed source and test files cannot become readable evidence", async () => {
+  const fetchImpl = async (input: string | URL | Request): Promise<Response> => {
+    const url = String(input);
+    if (url.includes("/search/repositories")) return Response.json({ items: [repository] });
+    if (url.includes("/commits/main")) return Response.json({ sha: "limited-commit" });
+    if (url.includes("/git/trees/limited-commit")) return Response.json({ tree: [
+      { path: "README.md", type: "blob", sha: "1", size: 200 },
+      { path: "package.json", type: "blob", sha: "2", size: 200 },
+      { path: "src/index.ts", type: "blob", sha: "3", size: 200 },
+      { path: "test/index.test.ts", type: "blob", sha: "4", size: 200 },
+      { path: ".github/workflows/check.yml", type: "blob", sha: "5", size: 200 },
+    ] });
+    if (url.includes("/contents/src/") || url.includes("/contents/test/")) {
+      return new Response("rate limited", { status: 403, headers: { "x-ratelimit-remaining": "0" } });
+    }
+    if (url.includes("/contents/")) return Response.json({
+      encoding: "base64", content: Buffer.from("reference documentation\n").toString("base64"),
+    });
+    return new Response("not found", { status: 404 });
+  };
+  const config = structuredClone(defaultConfig);
+  config.github.inspectLimit = 1;
+  config.slicing.maxRepositories = 1;
+  config.slicing.maxFilesPerRepository = 4;
+  await assert.rejects(
+    prepareReferencePack(new GitHubClient({ fetchImpl: fetchImpl as typeof fetch, apiBase: "https://mock.github" }), {
+      task: "coding agent harness extension architecture", queries: ["coding agent harness"], language: "TypeScript",
+    }, config),
+    /missing required implementation, test evidence slices.*rate limit exhausted/,
+  );
+});
+
+test("does not report an empty learning set when every discovered profile request failed", async () => {
+  const fetchImpl = async (input: string | URL | Request): Promise<Response> => {
+    const url = String(input);
+    if (url.includes("/search/repositories")) return Response.json({ items: [repository] });
+    if (url.includes("/commits/main")) return new Response("rate limited", {
+      status: 403, headers: { "x-ratelimit-remaining": "0" },
+    });
+    return new Response("not found", { status: 404 });
+  };
+  const config = structuredClone(defaultConfig);
+  config.github.inspectLimit = 1;
+  config.slicing.maxRepositories = 1;
+  await assert.rejects(
+    prepareReferencePack(new GitHubClient({ fetchImpl: fetchImpl as typeof fetch, apiBase: "https://mock.github" }), {
+      task: "coding agent harness extension architecture", queries: ["coding agent harness"], language: "TypeScript",
+    }, config),
+    /Automatic discovery could not complete candidate profiling.*rate limit exhausted/,
+  );
 });
 
 test("stops profiling and atlas construction after the bounded learning set is full", async () => {
@@ -93,7 +145,7 @@ test("stops profiling and atlas construction after the bounded learning set is f
   };
   const config = structuredClone(defaultConfig);
   config.slicing.maxRepositories = 1;
-  config.slicing.maxFilesPerRepository = 2;
+  config.slicing.maxFilesPerRepository = 4;
   config.atlas.maxFiles = 2;
   const pack = await prepareReferencePack(new GitHubClient({ fetchImpl: fetchImpl as typeof fetch, apiBase: "https://mock.github" }), {
     task: "coding agent harness extension architecture", queries: ["coding agent harness"], language: "TypeScript",
@@ -101,6 +153,44 @@ test("stops profiling and atlas construction after the bounded learning set is f
   assert.deepEqual(pack.selection?.selectedRepositories, ["example/coding-agent-harness"]);
   assert.equal(pack.atlases.length, 1);
   assert.ok(!calls.some((url) => url.includes("/repos/example/second-agent/")));
+});
+
+test("keeps rejected candidate scores for audit but removes their atlases from the learning space", async () => {
+  const weak = {
+    ...repository,
+    full_name: "example/no-source-agent",
+    html_url: "https://github.com/example/no-source-agent",
+    stargazers_count: 9000,
+  };
+  const strongTree = [
+    { path: "README.md", type: "blob", sha: "1", size: 200 },
+    { path: "package.json", type: "blob", sha: "2", size: 200 },
+    { path: "src/index.ts", type: "blob", sha: "3", size: 200 },
+    { path: "test/index.test.ts", type: "blob", sha: "4", size: 200 },
+    { path: ".github/workflows/check.yml", type: "blob", sha: "5", size: 200 },
+  ];
+  const fetchImpl = async (input: string | URL | Request): Promise<Response> => {
+    const url = String(input);
+    if (url.includes("/search/repositories")) return Response.json({ items: [weak, repository] });
+    if (url.includes("/repos/example/no-source-agent/commits/main")) return Response.json({ sha: "weak-commit" });
+    if (url.includes("/repos/example/coding-agent-harness/commits/main")) return Response.json({ sha: "strong-commit" });
+    if (url.includes("/git/trees/weak-commit")) return Response.json({ tree: strongTree.filter((entry) => !entry.path.startsWith("src/")) });
+    if (url.includes("/git/trees/strong-commit")) return Response.json({ tree: strongTree });
+    if (url.includes("/contents/")) return Response.json({
+      encoding: "base64", content: Buffer.from("export const extensionAgent = true;\n").toString("base64"),
+    });
+    return new Response("not found", { status: 404 });
+  };
+  const config = structuredClone(defaultConfig);
+  config.github.inspectLimit = 2;
+  config.slicing.maxRepositories = 1;
+  config.slicing.maxFilesPerRepository = 4;
+  const pack = await prepareReferencePack(new GitHubClient({ fetchImpl: fetchImpl as typeof fetch, apiBase: "https://mock.github" }), {
+    task: "coding agent harness extension architecture", queries: ["coding agent harness"], language: "TypeScript",
+  }, config);
+  assert.equal(pack.assessments.find((item) => item.repository.fullName === weak.full_name)?.accepted, false);
+  assert.deepEqual(pack.atlases.map((atlas) => atlas.repository), [repository.full_name]);
+  assert.deepEqual(pack.selection?.selectedRepositories, [repository.full_name]);
 });
 
 test("prioritizes an accepted user-specified repository and skips automatic search when the learning set is full", async () => {
@@ -127,7 +217,7 @@ test("prioritizes an accepted user-specified repository and skips automatic sear
   const client = new GitHubClient({ fetchImpl: fetchImpl as typeof fetch, apiBase: "https://mock.github" });
   const config = structuredClone(defaultConfig);
   config.slicing.maxRepositories = 1;
-  config.slicing.maxFilesPerRepository = 2;
+  config.slicing.maxFilesPerRepository = 4;
   const pack = await prepareReferencePack(client, {
     task: "coding agent harness extension architecture",
     language: "TypeScript",
@@ -173,7 +263,7 @@ test("reports a rejected specified repository and falls back to automatic discov
   const client = new GitHubClient({ fetchImpl: fetchImpl as typeof fetch, apiBase: "https://mock.github" });
   const config = structuredClone(defaultConfig);
   config.slicing.maxRepositories = 1;
-  config.slicing.maxFilesPerRepository = 2;
+  config.slicing.maxFilesPerRepository = 4;
   const pack = await prepareReferencePack(client, {
     task: "coding agent harness extension architecture",
     queries: ["coding agent harness"],

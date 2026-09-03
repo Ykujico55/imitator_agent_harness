@@ -82,6 +82,29 @@ test("scales category quotas to use a larger per-repository evidence budget", as
   assert.ok(slices.some((slice) => slice.path.startsWith("test/")));
 });
 
+test("preserves nested documentation, manifest, test, and implementation modalities under a tight monorepo budget", async () => {
+  const repo = matureRepository();
+  repo.tree = [
+    { path: "packages/agent/README.md", type: "blob", sha: "readme", size: 1000 },
+    { path: "packages/agent/package.json", type: "blob", sha: "manifest", size: 1000 },
+    { path: "packages/agent/test/extension.test.ts", type: "blob", sha: "test", size: 1000 },
+    ...Array.from({ length: 10 }, (_, index) => ({
+      path: `packages/agent/src/extension-registry-${index}.ts`, type: "blob" as const, sha: `source-${index}`, size: 1000,
+    })),
+  ];
+  const assessment = assessRepository(repo, { task: "coding agent extension registry" }, defaultConfig, new Date("2026-09-01T00:00:00Z"));
+  const fakeClient = { async readTextFile(): Promise<string> { return "export function extensionRegistry(): void {}\n"; } } as unknown as GitHubClient;
+  const config = structuredClone(defaultConfig);
+  config.slicing.maxRepositories = 1;
+  config.slicing.maxFilesPerRepository = 4;
+  const slices = await collectSlices(fakeClient, [assessment], { task: "coding agent extension registry" }, config);
+  assert.equal(slices.length, 4);
+  assert.ok(slices.some((slice) => slice.path === "packages/agent/README.md"));
+  assert.ok(slices.some((slice) => slice.path === "packages/agent/package.json"));
+  assert.ok(slices.some((slice) => slice.path.includes("/test/")));
+  assert.ok(slices.some((slice) => slice.path.includes("/src/")));
+});
+
 test("TypeScript AST slicing returns a complete task-relevant declaration", () => {
   const content = [
     "const unrelated = 1;",

@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { GitHubClient } from "./github.ts";
 import { applyAtlasCoverageGate, buildRepositoryDesignAtlas, renderDesignAtlases } from "./atlas.ts";
-import { buildEvidenceBundles, renderEvidenceBundles } from "./bundle.ts";
+import { buildEvidenceBundles, evidenceKind, renderEvidenceBundles } from "./bundle.ts";
 import { rankSearchCandidates } from "./discovery.ts";
 import type { DesignConfirmation, DesignGateResult, GateResult, HarnessConfig, ReferencePack, RepositoryProfile, ReviewSubmission, TaskSpec } from "./types.ts";
 import { renderAdaptationBrief, renderDesignAgentContext, renderDesignDossier } from "./design-render.ts";
@@ -70,6 +70,7 @@ export async function prepareReferencePack(
   let queries: string[] = [];
   let automaticAssessments: ReturnType<typeof assessRepository>[] = [];
   let automaticAtlases: ReferencePack["atlases"] = [];
+  const automaticProfileFailures: string[] = [];
   if (acceptedSpecified.length < learningLimit) {
     queries = planQueries(task, config);
     if (!queries.length && acceptedSpecified.length === 0) throw new Error("Could not derive a GitHub query; pass --query explicitly.");
@@ -87,7 +88,10 @@ export async function prepareReferencePack(
       let acceptedAutomatic = 0;
       for (const candidate of candidates) {
         let profile: RepositoryProfile;
-        try { profile = await client.profile(candidate); } catch { continue; }
+        try { profile = await client.profile(candidate); } catch (error) {
+          automaticProfileFailures.push(`${candidate.full_name}: ${error instanceof Error ? error.message : String(error)}`);
+          continue;
+        }
         const initial = { ...assessRepository(profile, task, config), selectionOrigin: "automatic" as const };
         const atlas = initial.accepted ? await buildRepositoryDesignAtlas(client, profile, task, config, contentCache) : undefined;
         const assessment = atlas ? applyAtlasCoverageGate(initial, atlas, config) : initial;
@@ -98,6 +102,9 @@ export async function prepareReferencePack(
       automaticAssessments = automaticOutcomes.map((outcome) => outcome.assessment)
         .sort((a, b) => Number(b.accepted) - Number(a.accepted) || b.overall - a.overall || a.repository.fullName.localeCompare(b.repository.fullName));
       automaticAtlases = automaticOutcomes.flatMap((outcome) => outcome.atlas ? [outcome.atlas] : []);
+      if (acceptedSpecified.length === 0 && acceptedAutomatic === 0 && automaticProfileFailures.length > 0) {
+        throw new Error(`Automatic discovery could not complete candidate profiling: ${automaticProfileFailures.slice(0, 3).join("; ")}`);
+      }
     } catch (error) {
       if (acceptedSpecified.length === 0) throw error;
       queries = [];
@@ -105,14 +112,33 @@ export async function prepareReferencePack(
   }
   const assessments = [...specifiedAssessments, ...automaticAssessments];
   const atlases = [...specifiedAtlases, ...automaticAtlases];
+  const selectedRepositories = assessments.filter((assessment) => assessment.accepted)
+    .slice(0, learningLimit)
+    .map((assessment) => assessment.repository.fullName);
+  const selectedRepositorySet = new Set(selectedRepositories);
+  const selectedAtlases = atlases.filter((atlas) => selectedRepositorySet.has(atlas.repository));
   const sliceFailures: SliceReadFailure[] = [];
-  const slices = await collectSlices(client, assessments, task, config, options.semanticSelector, atlases, contentCache, sliceFailures);
-  if (assessments.some((assessment) => assessment.accepted) && slices.length === 0) {
+  const slices = await collectSlices(client, assessments, task, config, options.semanticSelector, selectedAtlases, contentCache, sliceFailures);
+  if (selectedRepositories.length > 0 && slices.length === 0) {
     const reasons = [...new Set(sliceFailures.map((failure) => failure.reason))].slice(0, 3);
     throw new Error(`Accepted repositories produced no readable evidence slices${reasons.length ? `: ${reasons.join("; ")}` : ""}`);
   }
-  const bundles = buildEvidenceBundles(atlases, slices, config);
-  const selectedRepositories = [...new Set(slices.map((slice) => slice.repository))].slice(0, MAX_LEARNING_REPOSITORIES);
+  const requiredKinds = [...new Set(config.atlas.requiredCategories.flatMap((category) => {
+    if (category === "source") return ["implementation" as const];
+    if (category === "test") return ["test" as const];
+    if (category === "design" || category === "overview") return ["documentation" as const];
+    if (category === "manifest") return ["manifest" as const];
+    return [];
+  }))];
+  for (const repository of selectedRepositories) {
+    const presentKinds = new Set(slices.filter((slice) => slice.repository === repository).map(evidenceKind));
+    const missingKinds = requiredKinds.filter((kind) => !presentKinds.has(kind));
+    if (missingKinds.length > 0) {
+      const reasons = [...new Set(sliceFailures.filter((failure) => failure.repository === repository).map((failure) => failure.reason))].slice(0, 3);
+      throw new Error(`Repository ${repository} is missing required ${missingKinds.join(", ")} evidence slices after bounded reads${reasons.length ? `: ${reasons.join("; ")}` : ""}`);
+    }
+  }
+  const bundles = buildEvidenceBundles(selectedAtlases, slices, config);
   for (const repository of selectedRepositories) {
     if (!bundles.some((bundle) => bundle.repository === repository)) {
       throw new Error(`Repository ${repository} produced slices but no evidence bundle with ${config.bundles.minimumEvidenceKinds} distinct evidence kinds`);
@@ -121,7 +147,7 @@ export async function prepareReferencePack(
   return {
     schemaVersion: 4,
     generatedAt: new Date().toISOString(),
-    task, queries, assessments, atlases, slices, bundles,
+    task, queries, assessments, atlases: selectedAtlases, slices, bundles,
     practices: inferPractices({ assessments, slices }),
     selection: {
       schemaVersion: 1,

@@ -4,16 +4,25 @@
 
 高质量参考能够改善 agent 的局部搜索空间，但前提是参考本身相关、成熟、可迁移，并且上下文中包含的是设计证据而不是海量代码。系统因此把“召回”和“准入”分开：高 Star 只帮助召回，不能单独通过准入。
 
+## 本地边界定义
+
+本项目的 `src/` 是 **provider-neutral domain core**，不是“完全不含产品策略的通用 kernel”。参考筛选、评分、许可证准入、评审和 Design Dossier 校验正是 Imitator 的领域行为，因此允许存在于 `src/`；但它们只能依赖 Node 内置模块和同层模块，不得依赖 Pi、TypeBox 或 `integrations/` 中的适配器。
+
+`integrations/` 承担宿主相关机制：Pi 的工具注册、生命周期事件、交互命令、持久会话编排和 AST compiler adapter。依赖方向只能是 `integrations → src`。从参考项目学到的“mechanism not policy”在这里被适配为“宿主机制与领域策略分离”，而不是照搬成一个与产品目标冲突的 policy-free `src/`。这是“参考是证据而非权威；本地需求优先”的具体应用。
+
+该边界由递归 TypeScript AST 检查保护，覆盖静态导入、副作用导入、re-export、import-equals、动态 import 和 CommonJS require，并为每种加载形式保留反例测试。它保证依赖与 provider 边界，不试图通过脆弱的关键词黑名单判断一段代码是否具有“政策含义”。
+
 ## 当前数据流
 
 1. Query planner 从任务、显式查询、语言和生态生成最多五条 GitHub 查询。
 2. 若用户指定 GitHub 仓库或 revision，系统先直接读取其 repository/commit/tree API 并执行相同评估；通过者排在自动候选之前，失败者记录原因并触发默认自动发现。
 3. Discovery 只读取 repository search、commit、Git tree 和 content API，不 clone 或运行仓库。
+   搜索命中但候选画像因限额或网络错误无法完成时整次运行失败并保留错误原因，不得把不完整检查解释为“没有合适参考”。
 4. Assessor 给六个维度打 0–100 分，其中风险越高越差；许可证、领域最低分和总分是硬门禁。无论配置如何，进入 evidence space 的仓库硬限制为 1–2 个。
 5. Atlas builder 在固定文件/字符预算内建立 commit-pinned 仓库地图：manifest、模块、入口、设计文档、测试、CI 与可解析的相对依赖关系。七个命名信号形成可解释覆盖分，缺少配置要求的源码/测试证据时 fail closed。
-6. Slicer 使用 Atlas 中的入口、manifest 和设计文档作为结构优先级，再按路径语义选择文件；TS/JS 适配器优先选择完整 AST 声明或测试单元，其他语言确定性回退到行窗口；预算在字符层硬截止。
+6. Slicer 使用 Atlas 中的入口、manifest 和设计文档作为结构优先级，并在紧预算下保底选择 documentation、manifest、test、implementation 等关键模态；TS/JS 适配器优先选择完整 AST 声明或测试单元，其他语言确定性回退到行窗口；预算在字符层硬截止。Atlas 要求的 source/test 等类别若未形成可读切片则 fail closed。
 7. Bundle compiler 围绕系统架构、模块边界、技术选型、测试策略和失败语义，把不同模态的切片与 Atlas 关系编译为有界证据包。单一模态不足时不制造关系结论；每个包记录限制与 `explicit|observed` 认识论上限。
-8. Renderer 生成机器可读 manifest、Design Atlas、Evidence Bundle、指定仓库评估结果、防提示注入的 agent 工作协议和 pack-bound 评审请求。
+8. Renderer 生成机器可读 manifest、Design Atlas、Evidence Bundle、指定仓库评估结果、防提示注入的 agent 工作协议和 pack-bound 评审请求。未通过覆盖门禁的候选仅保留评分记录，其 Atlas 不进入学习产物。
 9. 人或外部 judge 先检查证据包再提交结构化决策；deterministic gate 校验 fingerprint、包/切片归属、置信度、风险和审查完整性，并再次限制最多两个仓库。
 10. Proposal 通过 deterministic gate 后仍进入 `awaiting_confirmation`；只有不同身份的人或独立 agent 才能确认参考集合。
 11. 参考确认后进入 `distilling`。agent 把每个参考派生主张标为 explicit、observed、inferred 或 unknown，再转换为语言无关的 Design Dossier。
@@ -55,6 +64,7 @@ Design Dossier 是第二层压缩与判断协议：它先写入 `design-proposal
 - `/imitator-confirm`：根据当前 phase 分别确认参考 proposal 或 Design Dossier；自动 eval 的两个阶段使用隔离 judge 进程；
 - `.imitator/pi-state.json`：持久化 task-bound 状态并在重启时重新校验 Git HEAD、checksum 和 pack 结构；
 - `/imitator-status`、`/imitator-reset`、`/imitator-prepare`：提供显式的人机控制面。
+- `/imitator-doctor`：以 `registry`、`hooks`、`store` 三个具名行为 oracle 检查扩展注册和持久状态完整性。
 
 新任务仍必须 reset，因为自然语言任务切换不能被可靠自动判定。启动新的 prepare 会在远程请求前清除旧批准状态，避免失败后重启恢复陈旧授权。扩展只认识配置的工具名，第三方扩展注册的其他写入工具不在拦截集合内（本阶段按产品选择暂不处理）。若未来需要不可绕过的 OS 级权限边界，应在 Pi 之外增加 sandbox，而不是把会话 hook 当安全边界。
 

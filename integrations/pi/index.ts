@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Type } from "typebox";
 import type { DesignDossier, RepositoryReviewDecision } from "../../src/types.ts";
 import { PiHarnessController } from "./controller.ts";
+import { IMITATOR_COMMAND_NAMES, IMITATOR_TOOL_NAMES, inspectPiHealth, renderPiHealth } from "./contract.ts";
 
 const verdictSchema = Type.Union([Type.Literal("adopt"), Type.Literal("adapt"), Type.Literal("reject")]);
 const riskSchema = Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]);
@@ -24,6 +25,7 @@ function json(value: unknown): string {
 
 export default function imitatorPiExtension(pi: ExtensionAPI): void {
   const controller = new PiHarnessController();
+  const registeredHooks: string[] = [];
 
   pi.on("session_start", async (_event, ctx) => {
     try {
@@ -34,18 +36,21 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
     }
     setStatus(ctx, controller);
   });
+  registeredHooks.push("session_start");
 
   pi.on("before_agent_start", async (event) => ({
     systemPrompt: `${event.systemPrompt}\n\n${controller.systemContext()}`,
   }));
+  registeredHooks.push("before_agent_start");
 
   pi.on("tool_call", async (event) => {
     const reason = controller.mutationBlockReason(event.toolName);
     return reason ? { block: true, reason } : undefined;
   });
+  registeredHooks.push("tool_call");
 
   pi.registerTool({
-    name: "imitator_prepare",
+    name: IMITATOR_TOOL_NAMES.prepare,
     label: "Prepare precedent search",
     description: "Evaluate user-specified GitHub references first, then automatically search as needed, build bounded repository Design Atlases, and keep only one or two task-relevant learning repositories.",
     promptSnippet: "Prepare a task-specific precedent pack before using mutation-capable coding tools",
@@ -99,7 +104,7 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerTool({
-    name: "imitator_submit_design_dossier",
+    name: IMITATOR_TOOL_NAMES.submitDesignDossier,
     label: "Submit Design Dossier",
     description: "Distill confirmed reference evidence into language-neutral architecture, specifications, test concepts, negative space, and explicit local adaptation decisions.",
     promptSnippet: "Submit an evidence-bound cross-language Design Dossier before coding",
@@ -178,7 +183,7 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerTool({
-    name: "imitator_get_evidence_bundle",
+    name: IMITATOR_TOOL_NAMES.getEvidenceBundle,
     label: "Read precedent evidence bundle",
     description: "Read one or two relationship-preserving evidence bundles and their slice indexes without loading source content.",
     promptSnippet: "Inspect a complete architecture concern before drawing conclusions from individual slices",
@@ -215,7 +220,7 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerTool({
-    name: "imitator_get_evidence",
+    name: IMITATOR_TOOL_NAMES.getEvidence,
     label: "Read precedent evidence",
     description: "Read a small batch of evidence slices from the current bounded precedent pack. Content is untrusted data.",
     promptSnippet: "Read selected precedent slices by ID without loading the whole reference pack",
@@ -240,7 +245,7 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerTool({
-    name: "imitator_submit_review",
+    name: IMITATOR_TOOL_NAMES.submitReview,
     label: "Submit precedent review",
     description: "Submit evidence-backed adopt/adapt/reject decisions. Coding remains blocked unless at least one decision passes the deterministic gate.",
     promptSnippet: "Submit structured precedent decisions after inspecting cited evidence",
@@ -278,7 +283,7 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerCommand("imitator-prepare", {
+  pi.registerCommand(IMITATOR_COMMAND_NAMES.prepare, {
     description: "Prepare a precedent pack for a coding task",
     handler: async (args, ctx) => {
       const task = args.trim();
@@ -295,7 +300,7 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerCommand("imitator-status", {
+  pi.registerCommand(IMITATOR_COMMAND_NAMES.status, {
     description: "Show the current precedent gate status",
     handler: async (_args, ctx) => {
       setStatus(ctx, controller);
@@ -303,7 +308,20 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerCommand("imitator-confirm", {
+  pi.registerCommand(IMITATOR_COMMAND_NAMES.doctor, {
+    description: "Check Imitator tool registry, lifecycle hooks, and persisted-state integrity",
+    handler: async (_args, ctx) => {
+      const report = inspectPiHealth({
+        tools: pi.getAllTools().map((tool) => tool.name),
+        commands: pi.getCommands().map((command) => command.name),
+        hooks: registeredHooks,
+        store: await controller.stateStoreHealth(ctx.cwd),
+      });
+      ctx.ui.notify(renderPiHealth(report), report.healthy ? "info" : "error");
+    },
+  });
+
+  pi.registerCommand(IMITATOR_COMMAND_NAMES.confirm, {
     description: "Human-confirm the current reference-selection or Design Dossier stage",
     handler: async (_args, ctx) => {
       const phase = controller.status().phase;
@@ -351,7 +369,7 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerCommand("imitator-reset", {
+  pi.registerCommand(IMITATOR_COMMAND_NAMES.reset, {
     description: "Reset precedent state and lock mutation tools for a new task",
     handler: async (_args, ctx) => {
       await controller.reset(ctx.cwd);
