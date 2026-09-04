@@ -3,6 +3,64 @@ import test from "node:test";
 import { defaultConfig } from "../src/config.ts";
 import { GitHubClient } from "../src/github.ts";
 import { prepareReferencePack } from "../src/pipeline.ts";
+import { cacheTask, calendarTask, parserTask, queueTask } from "./domain-fixtures.ts";
+import { applyReviewGate, fingerprintReferencePack } from "../src/review.ts";
+
+test("domain validation occurs before all GitHub I/O, including explicit references", async () => {
+  const task = structuredClone(cacheTask);
+  task.domain!.purpose.taskEvidence = "invented domain grounding";
+  task.referenceRepositories = [{ repository: "example/specified" }];
+  let calls = 0;
+  const client = new GitHubClient({ fetchImpl: async () => { calls++; throw new Error("Unexpected network"); } });
+  await assert.rejects(() => prepareReferencePack(client, task, defaultConfig), /not grounded/);
+  assert.equal(calls, 0);
+});
+
+test("offline discovery-to-review matrix selects product peers instead of engineering-only repositories", async (t) => {
+  for (const task of [cacheTask, queueTask, parserTask, calendarTask]) for (const license of ["MIT", "GPL-3.0", null]) await t.test(`${task.domain!.purpose.name} / ${license ?? "unknown-license"}`, async () => {
+    const good = { ...repository, license: license ? { spdx_id: license } : null, full_name: "example/product-peer", description: `${task.domain!.purpose.name} ${task.domain!.capabilities.map((item) => item.name).join(" ")}`, topics: [], language: "Python" };
+    const noise = { ...repository, full_name: "example/popular-utilities", description: "Zero-dependency TypeScript ESM utilities with tests", topics: ["typescript", "zero-dependency"], stargazers_count: 1_000_000 };
+    const behaviorName = task.domain!.capabilities[0]!.name.replace(/ /g, "_");
+    const files: Record<string, string> = {
+      "README.md": good.description,
+      "package.json": '{"name":"product-peer","type":"module"}',
+      "src/index.py": `def ${behaviorName}(state):\n    return state\n`,
+      "test/test_index.py": `def test_${behaviorName}():\n    assert ${behaviorName}(1) == 1\n`,
+      ".github/workflows/check.yml": "name: test\n",
+    };
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/search/repositories") return Response.json({ items: [noise, good] });
+      if (url.pathname.includes("/commits/")) return Response.json({ sha: "feedface1234" });
+      if (url.pathname.includes("/git/trees/")) return Response.json({ tree: Object.entries(files).map(([path, content], index) => ({ path, type: "blob", sha: `blob-${index}`, size: content.length })) });
+      const path = decodeURIComponent(url.pathname.split("/contents/")[1] ?? "");
+      if (path in files) return Response.json({ encoding: "base64", content: Buffer.from(files[path]!).toString("base64") });
+      throw new Error(`Unexpected mock request: ${url.pathname}`);
+    };
+    const config = structuredClone(defaultConfig);
+    config.slicing.maxRepositories = 1;
+    const pack = await prepareReferencePack(new GitHubClient({ fetchImpl, apiBase: "https://mock.github" }), task, config);
+    assert.deepEqual(pack.selection!.selectedRepositories, [good.full_name], JSON.stringify(pack.assessments.map((item) => ({ repository: item.repository.fullName, reasons: item.rejectionReasons }))));
+    assert.ok(pack.slices.every((slice) => slice.commitish === "feedface1234" && slice.license === license));
+    assert.match(pack.assessments.find((item) => item.repository.fullName === good.full_name)!.licenseWarnings!.join(" "), /learning-only/);
+    const slice = pack.slices.find((item) => item.path === "src/index.py")!;
+    assert.ok(slice);
+    const bundle = pack.bundles.find((item) => item.evidenceSliceIds.includes(slice.id))!;
+    assert.ok(bundle);
+    const gate = applyReviewGate(pack, {
+      schemaVersion: 1, referencePackFingerprint: fingerprintReferencePack(pack), reviewer: "offline-test",
+      decisions: [{
+        repository: good.full_name, verdict: "adapt", confidence: 0.9, riskLevel: "low",
+        summary: "The peer provides source-backed product behavior, not only shared packaging.",
+        transferablePatterns: ["Preserve the product responsibility behind a narrow local API."],
+        mismatches: ["Use local language and API conventions."], risks: [],
+        evidenceBundleIds: [bundle.id], evidenceSliceIds: [slice.id],
+        domainFit: { relation: "same-domain", rationale: `Both implement ${task.domain!.purpose.name}; the cited source exposes ${behaviorName}.`, evidenceSliceIds: [slice.id] },
+      }],
+    }, config);
+    assert.equal(gate.results[0]!.approved, true, JSON.stringify(gate.results));
+  });
+});
 
 const repository = {
   full_name: "example/coding-agent-harness",

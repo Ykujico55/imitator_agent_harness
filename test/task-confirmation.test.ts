@@ -6,7 +6,7 @@ import { applyReviewGate, fingerprintReferencePack } from "../src/review.ts";
 import { assessRepository } from "../src/score.ts";
 import { createTaskIdentity, fingerprintTask, normalizeTaskSpec } from "../src/task.ts";
 import type { EvidenceSlice, ReferencePack, ReviewSubmission } from "../src/types.ts";
-import { matureAtlas, matureBundle, matureRepository } from "./helpers.ts";
+import { codingAgentTask, matureAtlas, matureBundle, matureRepository } from "./helpers.ts";
 
 function fixture(): { pack: ReferencePack; submission: ReviewSubmission } {
   const repository = matureRepository();
@@ -23,12 +23,12 @@ function fixture(): { pack: ReferencePack; submission: ReviewSubmission } {
     sourceUrl: `${repository.htmlUrl}/blob/${repository.resolvedRevision}/src/registry.ts#L1-L5`,
     relevance: 80,
     reason: "registry boundary",
-    content: "export interface Registry {}",
+    content: "export interface HookRegistry {}",
   };
   const pack: ReferencePack = {
     schemaVersion: 4,
     generatedAt: "2026-09-01T00:00:00.000Z",
-    task: { task: "coding agent hook registry" },
+    task: codingAgentTask(),
     queries: ["coding agent hook registry"],
     assessments: [assessment],
     atlases: [matureAtlas(repository)],
@@ -51,6 +51,7 @@ function fixture(): { pack: ReferencePack; submission: ReviewSubmission } {
       risks: ["Do not copy provider types."],
       evidenceBundleIds: ["bundle-architecture"],
       evidenceSliceIds: [slice.id],
+      domainFit: { relation: "same-domain", rationale: "The coding-agent hook registry matches our extension lifecycle boundary.", evidenceSliceIds: [slice.id] },
     }],
   };
   return { pack, submission };

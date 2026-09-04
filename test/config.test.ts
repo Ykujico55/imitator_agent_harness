@@ -5,6 +5,19 @@ import { resolve } from "node:path";
 import test from "node:test";
 import { loadConfig } from "../src/config.ts";
 
+test("license policy defaults to warning, supports strict opt-in and rejects typos", async (t) => {
+  const directory = await mkdtemp(resolve(tmpdir(), "imitator-license-config-"));
+  t.after(async () => rm(directory, { recursive: true, force: true }));
+  const path = resolve(directory, "config.json");
+  assert.equal((await loadConfig()).acceptance.licensePolicy, "warn");
+  await writeFile(path, JSON.stringify({ acceptance: { allowedLicenses: ["MIT"] } }));
+  assert.equal((await loadConfig(path)).acceptance.licensePolicy, "warn");
+  await writeFile(path, JSON.stringify({ acceptance: { licensePolicy: "allowlist" } }));
+  assert.equal((await loadConfig(path)).acceptance.licensePolicy, "allowlist");
+  await writeFile(path, JSON.stringify({ acceptance: { licensePolicy: "alowlist" } }));
+  await assert.rejects(loadConfig(path), /licensePolicy must be warn or allowlist/);
+});
+
 test("bounds Design Atlas budgets and rejects unknown evidence categories", async (t) => {
   const directory = await mkdtemp(resolve(tmpdir(), "imitator-config-"));
   t.after(async () => rm(directory, { recursive: true, force: true }));

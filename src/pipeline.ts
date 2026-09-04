@@ -13,6 +13,7 @@ import { assessRepository } from "./score.ts";
 import { collectSlices, type SemanticSliceSelector, type SliceReadFailure } from "./slice.ts";
 import { inferPractices, renderAgentContext, renderReference } from "./render.ts";
 import { buildReviewRequest, buildReviewTemplate, renderGateReport } from "./review.ts";
+import { normalizeTaskSpec } from "./task.ts";
 
 async function mapLimited<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
@@ -33,6 +34,8 @@ export async function prepareReferencePack(
   config: HarnessConfig,
   options: { semanticSelector?: SemanticSliceSelector } = {},
 ): Promise<ReferencePack> {
+  // Validate and bind the task vocabulary before any remote data can influence it.
+  task = normalizeTaskSpec(task);
   const specified = normalizeSpecifiedRepositories(task.referenceRepositories) ?? [];
   const learningLimit = learningRepositoryLimit(config.slicing.maxRepositories);
   const contentCache = new Map<string, string>();
@@ -73,7 +76,7 @@ export async function prepareReferencePack(
   const automaticProfileFailures: string[] = [];
   if (acceptedSpecified.length < learningLimit) {
     queries = planQueries(task, config);
-    if (!queries.length && acceptedSpecified.length === 0) throw new Error("Could not derive a GitHub query; pass --query explicitly.");
+    if (!queries.length && acceptedSpecified.length === 0) throw new Error("Could not derive a product-domain query; provide a task-grounded domain purpose and capabilities (CLI: --domain-file), or --query for exploratory discovery only.");
     try {
       const batches = await mapLimited(queries, 3, (query) => client.searchRepositories(query, config.github.candidateLimit));
       const requestedNames = new Set([

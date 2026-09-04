@@ -57,10 +57,16 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
     promptGuidelines: [
       "Call this before edit, write, bash, powershell, or apply_patch for a new coding task.",
       "Use concrete domain queries when the task vocabulary is ambiguous.",
+      "Before discovering repositories, derive domain.purpose and 1-8 core product capabilities from the local task. For each, quote taskEvidence verbatim from task/mustHave and provide search/code terminology aliases (English aliases help cross-language discovery).",
+      "Describe what the product does, not how it is packaged: language, zero dependencies, README, ESM, test tooling and general quality are constraints, not domain concepts. Do not derive or change the task profile to fit a discovered repository.",
       "Use the returned Design Atlas to understand modules and coverage before requesting source slices.",
     ],
     parameters: Type.Object({
       task: Type.String({ minLength: 1, description: "The concrete local coding task" }),
+      domain: Type.Object({
+        purpose: Type.Object({ name: Type.String({ minLength: 2, maxLength: 100 }), aliases: Type.Array(Type.String({ minLength: 2, maxLength: 100 }), { maxItems: 6 }), taskEvidence: Type.String({ minLength: 3, maxLength: 600 }) }),
+        capabilities: Type.Array(Type.Object({ name: Type.String({ minLength: 2, maxLength: 100 }), aliases: Type.Array(Type.String({ minLength: 2, maxLength: 100 }), { maxItems: 6 }), taskEvidence: Type.String({ minLength: 3, maxLength: 600 }) }), { minItems: 1, maxItems: 8 }),
+      }),
       queries: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { maxItems: 5 })),
       language: Type.Optional(Type.String()),
       ecosystem: Type.Optional(Type.String()),
@@ -78,6 +84,7 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
       });
       const result = await controller.prepare({
         task: params.task,
+        domain: params.domain,
         queries: params.queries,
         language: params.language,
         ecosystem: params.ecosystem,
@@ -253,6 +260,9 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
       "Cite only bundle IDs inspected with imitator_get_evidence_bundle.",
       "Cite only slice IDs actually inspected.",
       "Use adapt when upstream assumptions or interfaces differ, and name those mismatches explicitly.",
+      "License restrictions are independent of design-learning value. Missing/non-allowlisted metadata alone is a warning under the default policy, not a high-risk verdict. State use restrictions; do not interpret approval as permission to copy, redistribute or install upstream code.",
+      "Adopt/adapt requires same-domain product responsibilities and cited implementation/test behavior in domainFit. Shared language, zero dependencies, ESM or generic testing are not domain fit; reject such references.",
+      "Confidence is suitability for this task, not certainty about a generic pattern. Do not raise confidence simply to pass the gate.",
     ],
     parameters: Type.Object({
       reviewer: Type.String({ minLength: 1 }),
@@ -267,6 +277,11 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
         risks: Type.Array(Type.String()),
         evidenceBundleIds: Type.Array(Type.String()),
         evidenceSliceIds: Type.Array(Type.String()),
+        domainFit: Type.Object({
+          relation: Type.Union([Type.Literal("same-domain"), Type.Literal("adjacent-domain"), Type.Literal("unrelated"), Type.Literal("unknown")]),
+          rationale: Type.String(),
+          evidenceSliceIds: Type.Array(Type.String()),
+        }),
       }), { minItems: 1 }),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -292,7 +307,7 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
         ctx.ui.setStatus("imitator", "imitator: preparing");
         const result = await controller.prepare({ task }, ctx.cwd);
         setStatus(ctx, controller);
-        ctx.ui.notify(`Prepared ${result.candidates.length} candidates. Continue with the imitator tools.`, "info");
+        ctx.ui.notify(`Exploratory scan: ${result.candidates.length} candidates. Ask the coding agent to call imitator_prepare with a task-grounded domain purpose/capabilities profile before reference review.`, "info");
       } catch (error) {
         setStatus(ctx, controller);
         ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");

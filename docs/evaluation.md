@@ -1,5 +1,7 @@
 # Real-model paired evaluation
 
+需要手动逐步执行、直接复制提示词时，使用 [普通 Pi / 增强 Pi 对照提示词流](pi-ab-prompt-flow.md)。它包含自然使用与流程对齐两种协议、统一任务卡、独立阶段评审、匿名最终盲评和记录模板。本页描述现有 runner，不代表 runner 已实现该文档的新版协议。
+
 ## Purpose
 
 单元测试只能证明检索、门禁和适配器按规格运行，不能证明参考包提高了软件质量。本 runner 在相同本地 fixture、任务、模型、推理环境和验收命令下生成 paired runs：

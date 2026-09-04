@@ -11,7 +11,7 @@ import { assessRepository } from "../src/score.ts";
 import { createTaskIdentity } from "../src/task.ts";
 import { writeDesignProposal, writeDesignRequest, writeDesignResult, writeGateResult } from "../src/pipeline.ts";
 import type { DesignDossier, EvidenceSlice, GateResult, ReferencePack, ReviewSubmission } from "../src/types.ts";
-import { matureAtlas, matureBundle, matureRepository } from "./helpers.ts";
+import { codingAgentTask, matureAtlas, matureBundle, matureRepository } from "./helpers.ts";
 
 function referenceFixture(): { pack: ReferencePack; gate: GateResult; submission: ReviewSubmission; taskFingerprint: string } {
   const repository = matureRepository();
@@ -23,7 +23,7 @@ function referenceFixture(): { pack: ReferencePack; gate: GateResult; submission
     reason: "registry contract", content: "export interface HookRegistry { register(name: string): void }",
   };
   const pack: ReferencePack = {
-    schemaVersion: 4, generatedAt: "2026-09-01T00:00:00.000Z", task: { task: "coding agent hook registry" },
+    schemaVersion: 4, generatedAt: "2026-09-01T00:00:00.000Z", task: codingAgentTask(),
     queries: ["coding agent hook registry"], assessments: [assessment], atlases: [matureAtlas(repository)], slices: [slice],
     bundles: [matureBundle(repository, [slice.id])], practices: [],
   };
@@ -34,6 +34,7 @@ function referenceFixture(): { pack: ReferencePack; gate: GateResult; submission
       summary: "The registry boundary transfers after adapting lifecycle naming.",
       transferablePatterns: ["Separate hook registration from execution."], mismatches: ["Lifecycle names differ."],
       risks: ["Provider types must not enter the core."], evidenceBundleIds: ["bundle-architecture"], evidenceSliceIds: [slice.id],
+      domainFit: { relation: "same-domain", rationale: "Both coding-agent systems register lifecycle hooks through a registry.", evidenceSliceIds: [slice.id] },
     }],
   };
   const gate = applyReviewGate(pack, submission, defaultConfig);

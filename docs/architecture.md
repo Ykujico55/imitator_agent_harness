@@ -18,7 +18,7 @@
 2. 若用户指定 GitHub 仓库或 revision，系统先直接读取其 repository/commit/tree API 并执行相同评估；通过者排在自动候选之前，失败者记录原因并触发默认自动发现。
 3. Discovery 只读取 repository search、commit、Git tree 和 content API，不 clone 或运行仓库。
    搜索命中但候选画像因限额或网络错误无法完成时整次运行失败并保留错误原因，不得把不完整检查解释为“没有合适参考”。
-4. Assessor 给六个维度打 0–100 分，其中风险越高越差；许可证、领域最低分和总分是硬门禁。无论配置如何，进入 evidence space 的仓库硬限制为 1–2 个。
+4. Assessor 给六个维度打 0–100 分，其中风险越高越差；领域最低分、总分和非许可证风险是硬门禁。许可证独立提示，默认 `warn`，仅显式 `allowlist` 模式实施许可证硬门禁。无论配置如何，进入 evidence space 的仓库硬限制为 1–2 个。
 5. Atlas builder 在固定文件/字符预算内建立 commit-pinned 仓库地图：manifest、模块、入口、设计文档、测试、CI 与可解析的相对依赖关系。七个命名信号形成可解释覆盖分，缺少配置要求的源码/测试证据时 fail closed。
 6. Slicer 使用 Atlas 中的入口、manifest 和设计文档作为结构优先级，并在紧预算下保底选择 documentation、manifest、test、implementation 等关键模态；TS/JS 适配器优先选择完整 AST 声明或测试单元，其他语言确定性回退到行窗口；预算在字符层硬截止。Atlas 要求的 source/test 等类别若未形成可读切片则 fail closed。
 7. Bundle compiler 围绕系统架构、模块边界、技术选型、测试策略和失败语义，把不同模态的切片与 Atlas 关系编译为有界证据包。单一模态不足时不制造关系结论；每个包记录限制与 `explicit|observed` 认识论上限。
@@ -33,7 +33,7 @@
 
 - 上游 README、源码注释或测试可能包含 prompt injection，因此永远只作为引用数据呈现。
 - 仓库可能利用构建脚本或依赖投毒，因此 discovery 阶段禁止 clone/install/build/execute。
-- 无许可证代码默认不可迁移；强 copyleft 或自定义许可证必须显式配置并由人复核。
+- 未知或非白名单许可证默认不阻断设计学习，但独立列出使用限制；参考入选不授权代码复制、再分发或安装。需要严格准入时配置 `acceptance.licensePolicy: "allowlist"`。任何实际复用前仍应核对适用条款。
 - 默认分支会漂移，因此 tree、content、证据 ID 和链接全部固定到解析后的 commit SHA。
 - Star、topic 和描述可被操纵，因此需要测试、CI、治理文件、维护时间等交叉信号；后续再接安全扫描和组织信誉。
 - `AGENTS.md`、`CLAUDE.md`、`.agents/` 和常见 IDE agent 指令文件默认不进入切片；其他远程内容仍按不可信证据处理。

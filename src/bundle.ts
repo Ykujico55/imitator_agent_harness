@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import type { EvidenceBundle, EvidenceKind, EvidenceSlice, HarnessConfig, RepositoryDesignAtlas } from "./types.ts";
+import { isTestPath } from "./evidence-path.ts";
 
 const DOCUMENTATION = /(^|\/)(README|docs?|architecture|design|adr|rfcs?)(\/|\.|$)|(^|\/)(ADR|RFC)-?\d+/i;
 const DESIGN_DECISION = /(^|\/)(architecture|design|adr|rfcs?)(\/|\.|$)|(^|\/)(ADR|RFC)-?\d+/i;
 const MANIFEST = /(^|\/)(package\.json|pyproject\.toml|Cargo\.toml|go\.mod|pom\.xml|build\.gradle(?:\.kts)?)$/i;
-const TEST = /(^|\/)(test|tests|spec|__tests__)(\/|$)|\.(test|spec)\./i;
 const FAILURE = /\b(error|errors|failure|failures|exception|exceptions|retry|timeout|abort|reject|invalid|panic|catch|throw)\b/i;
 
 export function supportsExplicitIntent(slice: Pick<EvidenceSlice, "path">): boolean {
@@ -13,7 +13,7 @@ export function supportsExplicitIntent(slice: Pick<EvidenceSlice, "path">): bool
 
 export function evidenceKind(slice: EvidenceSlice): EvidenceKind {
   if (MANIFEST.test(slice.path)) return "manifest";
-  if (TEST.test(slice.path)) return "test";
+  if (isTestPath(slice.path)) return "test";
   if (DOCUMENTATION.test(slice.path)) return "documentation";
   return "implementation";
 }

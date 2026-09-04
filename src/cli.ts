@@ -8,6 +8,7 @@ import { prepareReferencePack, writeGateResult, writeReferencePack } from "./pip
 import { applyReviewGate, parseReviewSubmission } from "./review.ts";
 import { parseRepositorySpecifier } from "./reference.ts";
 import type { ReferencePack } from "./types.ts";
+import { normalizeDomainSpec } from "./domain.ts";
 
 const HELP = `imitator-agent-harness
 
@@ -20,8 +21,9 @@ Usage:
 Options:
   --task <text>       Required implementation task
   --query <query>     Explicit GitHub query; repeatable
-  --language <name>   GitHub language qualifier
-  --ecosystem <name>  Additional task/domain signal
+  --language <name>   Preferred implementation language (cross-language search remains enabled)
+  --ecosystem <name>  Implementation ecosystem; not a domain-match signal
+  --domain-file <path> Task-grounded purpose/capabilities JSON (required before review approval)
   --reference <repo>  Preferred GitHub owner/repo[@revision] or URL; repeatable, max 2
   --config <path>     JSON configuration file
   --out <directory>   Output root (default: .imitator/reference)
@@ -43,6 +45,7 @@ async function prepareCommand(): Promise<void> {
       task: { type: "string" }, query: { type: "string", multiple: true },
       language: { type: "string" }, ecosystem: { type: "string" }, config: { type: "string" },
       reference: { type: "string", multiple: true },
+      "domain-file": { type: "string" },
       out: { type: "string", default: ".imitator/reference" }, token: { type: "string" },
       json: { type: "boolean", default: false }, help: { type: "boolean", short: "h" },
     },
@@ -54,6 +57,7 @@ async function prepareCommand(): Promise<void> {
   const client = new GitHubClient({ token: values.token ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN });
   const pack = await prepareReferencePack(client, {
     task: values.task, queries: values.query, language: values.language, ecosystem: values.ecosystem,
+    domain: values["domain-file"] ? normalizeDomainSpec(JSON.parse(await readFile(values["domain-file"], "utf8")), { task: values.task, language: values.language, ecosystem: values.ecosystem }) : undefined,
     referenceRepositories: values.reference?.map(parseRepositorySpecifier),
   }, config);
   const directory = await writeReferencePack(pack, values.out!);

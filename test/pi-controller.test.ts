@@ -24,7 +24,7 @@ import {
   type PiControllerPhase,
 } from "../integrations/pi/contract.ts";
 import { FilePiStateStore, inspectWorkspace, type PersistedPiPayload, type PiStateStore } from "../integrations/pi/state.ts";
-import { matureAtlas, matureBundle, matureRepository } from "./helpers.ts";
+import { codingAgentTask, matureAtlas, matureBundle, matureRepository } from "./helpers.ts";
 
 function preparedRun(): PreparedRun {
   const repository = matureRepository();
@@ -46,7 +46,7 @@ function preparedRun(): PreparedRun {
   const pack: ReferencePack = {
     schemaVersion: 4,
     generatedAt: "2026-09-01T00:00:00.000Z",
-    task: { task: "coding agent hook registry" },
+    task: codingAgentTask(),
     queries: ["coding agent hook registry"],
     assessments: [assessment],
     atlases: [matureAtlas(repository)],
@@ -97,6 +97,7 @@ function approvedDecision(): RepositoryReviewDecision {
     risks: ["Do not reuse provider-specific types."],
     evidenceBundleIds: ["bundle-architecture"],
     evidenceSliceIds: ["approved-slice"],
+    domainFit: { relation: "same-domain", rationale: "Both coding agents expose a hook registry for extension execution.", evidenceSliceIds: ["approved-slice"] },
   };
 }
 
@@ -305,6 +306,27 @@ test("prepare fails closed when stale state cannot be cleared", async () => {
   await assert.rejects(() => controller.prepare(run.pack.task, "C:/workspace"), /state is read-only/);
   assert.equal(controller.status().phase, "idle");
   assert.match(controller.mutationBlockReason("write")!, /imitator_prepare/);
+});
+
+test("restoring a legacy approved proposal reruns domain review and keeps mutation locked", async (t) => {
+  const cwd = await mkdtemp(resolve(tmpdir(), "imitator-legacy-domain-"));
+  t.after(async () => rm(cwd, { recursive: true, force: true }));
+  const run = preparedRun();
+  run.taskIdentity = await inspectWorkspace(run.pack.task, cwd);
+  const store = new MemoryStateStore();
+  const first = new PiHarnessController(runtime(run), 6, store);
+  await first.prepare(run.pack.task, cwd);
+  await first.getEvidenceBundles(["bundle-architecture"]);
+  await first.getEvidence(["approved-slice"]);
+  await first.submitReview("pi-test", [approvedDecision()]);
+  assert.equal(store.state!.phase, "awaiting_confirmation");
+  // Simulate a valid old-format persisted proposal, not a checksum-tampered file.
+  delete store.state!.submission!.decisions[0]!.domainFit;
+  delete store.state!.provisionalGate!.results[0]!.decision!.domainFit;
+  const restored = new PiHarnessController(runtime(run), 6, store);
+  assert.equal(await restored.restore(cwd), false);
+  assert.equal(restored.status().phase, "idle");
+  assert.ok(restored.mutationBlockReason("write"));
 });
 
 test("current Pi loader discovers the declared extension tools, commands, and gates", async (t) => {

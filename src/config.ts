@@ -13,6 +13,7 @@ export const defaultConfig: HarnessConfig = {
     minimumDomainMatch: 50,
     maximumRisk: 45,
     allowedLicenses: ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC"],
+    licensePolicy: "warn",
   },
   slicing: {
     maxRepositories: MAX_LEARNING_REPOSITORIES,
@@ -48,6 +49,10 @@ function boundedInteger(value: unknown, fallback: number, minimum: number, maxim
 export async function loadConfig(path?: string): Promise<HarnessConfig> {
   if (!path) return structuredClone(defaultConfig);
   const input = JSON.parse(await readFile(path, "utf8")) as Partial<HarnessConfig>;
+  const acceptance = { ...defaultConfig.acceptance, ...input.acceptance };
+  if (acceptance.licensePolicy !== "warn" && acceptance.licensePolicy !== "allowlist") {
+    throw new Error("acceptance.licensePolicy must be warn or allowlist");
+  }
   const slicing = { ...defaultConfig.slicing, ...input.slicing };
   slicing.maxRepositories = learningRepositoryLimit(slicing.maxRepositories);
   const atlas = { ...defaultConfig.atlas, ...input.atlas };
@@ -64,7 +69,7 @@ export async function loadConfig(path?: string): Promise<HarnessConfig> {
   bundles.minimumEvidenceKinds = boundedInteger(bundles.minimumEvidenceKinds, defaultConfig.bundles.minimumEvidenceKinds, 1, 5);
   return {
     github: { ...defaultConfig.github, ...input.github },
-    acceptance: { ...defaultConfig.acceptance, ...input.acceptance },
+    acceptance,
     slicing,
     atlas,
     bundles,

@@ -1,4 +1,11 @@
-import type { EvidenceBundle, RepositoryDesignAtlas, RepositoryProfile } from "../src/types.ts";
+import type { EvidenceBundle, RepositoryDesignAtlas, RepositoryProfile, TaskSpec } from "../src/types.ts";
+
+export function codingAgentTask(task = "coding agent hook registry"): TaskSpec {
+  return { task, domain: {
+    purpose: { name: "coding agent", aliases: ["agent harness"], taskEvidence: "coding agent" },
+    capabilities: [{ name: "registry", aliases: ["extension registry", "hook registry"], taskEvidence: task.includes("registry") ? "registry" : "extensions" }],
+  } };
+}
 
 export function matureRepository(overrides: Partial<RepositoryProfile> = {}): RepositoryProfile {
   return {

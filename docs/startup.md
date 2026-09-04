@@ -167,16 +167,18 @@ pi --provider openai --model <model-id>
 
 ### 6.1 准备参考包
 
-可以直接向模型发送完整任务，让它自行调用 `imitator_prepare`。手动验证时执行：
+推荐直接向模型发送完整任务，让它先提取产品职责、能力与别名，并在 `imitator_prepare` 中提交 `domain`。不要用“零依赖、TypeScript”等工程偏好代替领域。详见 [领域提取与评审约束](domain-fit.md)。
+
+手动探索时也可以执行：
 
 ```text
 /imitator-prepare 为 TypeScript coding agent 实现 extension tool registry、lifecycle hooks 和持久化安全门禁
 ```
 
-斜杠命令只执行 prepare，不会自动触发下一轮模型推理。完成后再发送普通消息：
+纯文本斜杠命令没有结构化领域描述，只进行探索，不会自动触发下一轮模型推理，也不能直接通过评审。完成后再发送普通消息：
 
 ```text
-继续完成任务。先检查 Evidence Bundle 和必要切片，提交参考评审；不要开始编码。
+先根据原任务提取 domain.purpose 和 domain.capabilities，用带领域描述的 imitator_prepare 重新准备。然后检查 Evidence Bundle 和必要切片，提交包含 domainFit 的参考评审；不要开始编码。
 ```
 
 模型应依次使用：
@@ -288,7 +290,7 @@ rm -f .imitator/pi-state.json
 
 ### 没有找到可接受参考
 
-检查返回的六维评分、许可证、Atlas 覆盖和可读证据错误。没有适合的参考时系统默认拒绝放行；不要仅通过降低门槛绕过许可证或关键 source/test 证据要求。
+检查返回的六维评分、许可证提示、Atlas 覆盖和可读证据错误。许可证默认 `warn`，不因未知或非白名单元数据单独拒绝；需要严格准入可设置 `acceptance.licensePolicy: "allowlist"` 后重新 prepare。参考入选不代表获得代码复用授权。没有适合的参考时系统仍拒绝放行；不要降低领域或关键 source/test 证据要求来凑数。
 
 ## 8. 最小日常启动清单
 

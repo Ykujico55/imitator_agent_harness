@@ -8,6 +8,7 @@
     "minimumOverall": 60,
     "minimumDomainMatch": 50,
     "maximumRisk": 45,
+    "licensePolicy": "warn",
     "allowedLicenses": ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC"]
   },
   "slicing": {

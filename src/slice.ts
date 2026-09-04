@@ -4,6 +4,7 @@ import type { GitHubClient } from "./github.ts";
 import { taskTerms } from "./query.ts";
 import { learningRepositoryLimit } from "./reference.ts";
 import { repositoryContentKey } from "./atlas.ts";
+import { isCodeFile, isImplementationPath, isTestPath } from "./evidence-path.ts";
 
 export type SliceWindow = {
   start: number;
@@ -35,7 +36,7 @@ const MANIFEST_PATH = /(^|\/)(package\.json|pyproject\.toml|Cargo\.toml|go\.mod|
 
 export function rankPaths(tree: TreeEntry[], terms: string[], preferredPaths = new Set<string>()): Array<{ entry: TreeEntry; score: number; reason: string }> {
   return tree
-    .filter((entry) => entry.type === "blob" && TEXT_FILE.test(entry.path) && !EXCLUDED.test(entry.path) && (entry.size ?? 0) < 120_000)
+    .filter((entry) => entry.type === "blob" && (TEXT_FILE.test(entry.path) || isCodeFile(entry.path)) && !EXCLUDED.test(entry.path) && (entry.size ?? 0) < 120_000)
     .map((entry) => {
       const path = entry.path.toLowerCase();
       const matches = terms.filter((term) => path.includes(term.toLowerCase()));
@@ -46,8 +47,8 @@ export function rankPaths(tree: TreeEntry[], terms: string[], preferredPaths = n
       if (DESIGN_PATH.test(path)) { score += 35; reasons.push("design documentation"); }
       if (README_PATH.test(path)) { score += 28; reasons.push("project overview"); }
       if (/(^|\/)(examples?|samples?)(\/|$)/i.test(path)) { score += 18; reasons.push("usage example"); }
-      if (/(^|\/)(test|tests|spec|__tests__)(\/|$)/i.test(path)) { score += 12; reasons.push("behavioral evidence"); }
-      if (/(^|\/)(src|lib|packages)(\/|$)/i.test(path)) { score += 8; reasons.push("implementation source"); }
+      if (isTestPath(path)) { score += 12; reasons.push("behavioral evidence"); }
+      if (isCodeFile(path) && !isTestPath(path)) { score += 8; reasons.push("implementation source"); }
       score -= path.split("/").length * 0.5;
       return { entry, score, reason: reasons.join("; ") || "representative source" };
     })
@@ -57,10 +58,10 @@ export function rankPaths(tree: TreeEntry[], terms: string[], preferredPaths = n
 
 function evidenceBucket(path: string): string {
   if (DESIGN_PATH.test(path)) return "design";
-  if (/(^|\/)(test|tests|spec|__tests__)(\/|$)/i.test(path)) return "test";
+  if (isTestPath(path)) return "test";
   if (/(^|\/)(examples?|samples?)(\/|$)/i.test(path)) return "example";
   if (README_PATH.test(path)) return "readme";
-  if (/(^|\/)(src|lib|packages)(\/|$)/i.test(path)) return "source";
+  if (isImplementationPath(path)) return "source";
   return "other";
 }
 

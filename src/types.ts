@@ -1,11 +1,24 @@
 export type TaskSpec = {
   task: string;
+  domain?: TaskDomainSpec;
   queries?: string[];
   language?: string;
   ecosystem?: string;
   mustHave?: string[];
   avoid?: string[];
   referenceRepositories?: SpecifiedRepository[];
+};
+
+/** Task-specific vocabulary, supplied before repository discovery, not a global taxonomy. */
+export type DomainConcept = {
+  name: string;
+  aliases: string[];
+  taskEvidence: string;
+};
+
+export type TaskDomainSpec = {
+  purpose: DomainConcept;
+  capabilities: DomainConcept[];
 };
 
 export type SpecifiedRepository = {
@@ -129,6 +142,8 @@ export type RepositoryDesignAtlas = {
 
 export type RepositoryAssessment = {
   repository: RepositoryProfile;
+  /** Independent use restrictions; absent only in legacy packs. */
+  licenseWarnings?: string[];
   selectionOrigin?: "user-specified" | "automatic";
   atlasCoverage?: AtlasCoverage;
   dimensions: {
@@ -190,6 +205,7 @@ export type HarnessConfig = {
     minimumDomainMatch: number;
     maximumRisk: number;
     allowedLicenses: string[];
+    licensePolicy: "warn" | "allowlist";
   };
   slicing: {
     maxRepositories: number;
@@ -232,6 +248,12 @@ export type ReferencePack = {
 export type ReviewVerdict = "adopt" | "adapt" | "reject" | "pending";
 export type ReviewRisk = "low" | "medium" | "high";
 
+export type DomainFitReview = {
+  relation: "same-domain" | "adjacent-domain" | "unrelated" | "unknown";
+  rationale: string;
+  evidenceSliceIds: string[];
+};
+
 export type RepositoryReviewDecision = {
   repository: string;
   verdict: ReviewVerdict;
@@ -243,12 +265,15 @@ export type RepositoryReviewDecision = {
   risks: string[];
   evidenceBundleIds: string[];
   evidenceSliceIds: string[];
+  /** Legacy proposals may omit this, but cannot pass the current review gate. */
+  domainFit?: DomainFitReview;
 };
 
 export type ReviewRequest = {
   schemaVersion: 1;
   referencePackFingerprint: string;
   task: TaskSpec;
+  domain: { anchors: string[]; queryTerms: string[]; source: string };
   instructions: string[];
   candidates: Array<{
     repository: string;
@@ -256,6 +281,7 @@ export type ReviewRequest = {
     selectionOrigin: "user-specified" | "automatic";
     license: string | null;
     phaseOneOverall: number;
+    licenseWarnings: string[];
     dimensions: RepositoryAssessment["dimensions"];
     atlas: RepositoryDesignAtlas;
     bundles: EvidenceBundle[];

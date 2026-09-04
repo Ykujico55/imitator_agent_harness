@@ -12,16 +12,16 @@ import type {
 } from "./types.ts";
 import type { GitHubClient } from "./github.ts";
 import { taskTerms } from "./query.ts";
+import { isCodeFile, isImplementationPath, isTestPath } from "./evidence-path.ts";
 
 const MANIFEST = /(^|\/)(package\.json|pyproject\.toml|Cargo\.toml|go\.mod|pom\.xml|build\.gradle(?:\.kts)?)$/i;
-const SOURCE = /(^|\/)(src|lib)(\/|$)|^(packages|apps)\/[^/]+\/(src|lib)(\/|$)/i;
-const TEST = /(^|\/)(test|tests|spec|__tests__)(\/|$)|\.(test|spec)\.[cm]?[jt]sx?$/i;
 const AUTOMATION = /^\.github\/workflows\/.*\.ya?ml$/i;
 const OVERVIEW = /(^|\/)README(?:\.[^/]*)?$/i;
 const DESIGN = /(^|\/)(architecture|design|adr|rfcs?)(\/|\.|$)|(^|\/)(ADR|RFC)-?\d+[^/]*\.md$/i;
 const SECURITY = /(^|\/)(SECURITY|THREAT_MODEL)(\.[^/]*)?$/i;
+const ENTRY = /(^|\/)(index|main|cli|server|app)\.[^/]+$/i;
+// Relationship extraction remains JS/TS-specific; structural coverage is language-neutral.
 const SCRIPT_SOURCE = /\.[cm]?[jt]sx?$/i;
-const ENTRY = /(^|\/)(index|main|cli|server|app)\.[cm]?[jt]sx?$/i;
 const IMPORT_PATTERNS = [
   /(?:import|export)\s+(?:[^"']*?\s+from\s+)?["']([^"']+)["']/g,
   /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
@@ -107,7 +107,7 @@ function moduleRoot(path: string): { rootPath: string; kind: RepositoryDesignAtl
   if (parts[0] === "src" || parts[0] === "lib") {
     return { rootPath: parts.length > 2 ? `${parts[0]}/${parts[1]}` : parts[0], kind: "library" };
   }
-  if (TEST.test(path)) return { rootPath: parts.length > 1 ? parts[0]! : ".", kind: "test" };
+  if (isTestPath(path)) return { rootPath: parts.length > 1 ? parts[0]! : ".", kind: "test" };
   if (/(^|\/)(examples?|samples?)(\/|$)/i.test(path)) return { rootPath: parts.length > 1 ? parts[0]! : ".", kind: "example" };
   return undefined;
 }
@@ -133,7 +133,7 @@ function extractRelations(contents: Map<string, string>, files: Set<string>, rep
       for (let match = pattern.exec(content); match; match = pattern.exec(content)) {
         const target = resolveRelativeImport(from, match[1]!, files);
         if (!target) continue;
-        const kind = TEST.test(from) ? "tests" as const : "imports" as const;
+        const kind = isTestPath(from) ? "tests" as const : "imports" as const;
         const key = `${from}\0${target}\0${kind}`;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -180,8 +180,8 @@ export async function buildRepositoryDesignAtlas(
   const files = blobPaths(repository.tree);
   const fileSet = new Set(files);
   const manifestPaths = files.filter((path) => MANIFEST.test(path));
-  const sourcePaths = files.filter((path) => SOURCE.test(path) && SCRIPT_SOURCE.test(path) && !TEST.test(path));
-  const testPaths = files.filter((path) => TEST.test(path) && SCRIPT_SOURCE.test(path));
+  const sourcePaths = files.filter(isImplementationPath);
+  const testPaths = files.filter((path) => isTestPath(path) && isCodeFile(path));
   const overviewPaths = files.filter((path) => OVERVIEW.test(path));
   const designPaths = files.filter((path) => DESIGN.test(path) || SECURITY.test(path));
   const automationPaths = files.filter((path) => AUTOMATION.test(path));
@@ -190,7 +190,7 @@ export async function buildRepositoryDesignAtlas(
   const rankedStructuralFiles = unique([...manifestPaths, ...sourcePaths, ...testPaths]).sort((a, b) => {
     const score = (path: string): number =>
       (MANIFEST.test(path) ? 100 : 0) + (ENTRY.test(path) ? 60 : 0) +
-      (terms.some((term) => path.toLowerCase().includes(term)) ? 30 : 0) + (TEST.test(path) ? 10 : 0) - path.split("/").length;
+      (terms.some((term) => path.toLowerCase().includes(term)) ? 30 : 0) + (isTestPath(path) ? 10 : 0) - path.split("/").length;
     return score(b) - score(a) || a.localeCompare(b);
   });
   const contents = new Map<string, string>();
