@@ -99,4 +99,4 @@ node src/cli.ts prepare --task "Build a job queue with retries and acknowledgeme
 
 这验证确定性规则、模拟 GitHub 流水线及 Pi 扩展加载，不代表新版已经通过真实模型端到端测试。
 
-Atlas 的源码/测试文件识别覆盖多种语言和常见根目录布局；非 JS/TS 文件使用结构索引及窗口切片，尚不声称支持所有语言的 import 关系或 AST 语义分析。
+Atlas 的源码/测试文件识别覆盖多种语言和常见根目录布局。Pi 对 Python 可启用标准库 AST/TOML 解析、静态导入关系和完整声明切片，见 [Python 参考学习](python-learning.md)；其余未支持语言及解析失败仍降级为结构索引和行窗口，不声称支持所有语言的运行时语义分析。

@@ -14,6 +14,7 @@ import { collectSlices, type SemanticSliceSelector, type SliceReadFailure } from
 import { inferPractices, renderAgentContext, renderReference } from "./render.ts";
 import { buildReviewRequest, buildReviewTemplate, renderGateReport } from "./review.ts";
 import { normalizeTaskSpec } from "./task.ts";
+import type { SourceAnalyzer } from "./source-analysis.ts";
 
 async function mapLimited<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
@@ -32,7 +33,7 @@ export async function prepareReferencePack(
   client: GitHubClient,
   task: TaskSpec,
   config: HarnessConfig,
-  options: { semanticSelector?: SemanticSliceSelector } = {},
+  options: { semanticSelector?: SemanticSliceSelector; sourceAnalyzer?: SourceAnalyzer } = {},
 ): Promise<ReferencePack> {
   // Validate and bind the task vocabulary before any remote data can influence it.
   task = normalizeTaskSpec(task);
@@ -44,7 +45,7 @@ export async function prepareReferencePack(
       const repository = await client.getRepository(requested.repository);
       const profile = await client.profile(repository, requested.revision);
       const initial = { ...assessRepository(profile, task, config), selectionOrigin: "user-specified" as const };
-      const atlas = initial.accepted ? await buildRepositoryDesignAtlas(client, profile, task, config, contentCache) : undefined;
+      const atlas = initial.accepted ? await buildRepositoryDesignAtlas(client, profile, task, config, contentCache, options.sourceAnalyzer) : undefined;
       const assessment = atlas ? applyAtlasCoverageGate(initial, atlas, config) : initial;
       return {
         assessment,
@@ -96,7 +97,7 @@ export async function prepareReferencePack(
           continue;
         }
         const initial = { ...assessRepository(profile, task, config), selectionOrigin: "automatic" as const };
-        const atlas = initial.accepted ? await buildRepositoryDesignAtlas(client, profile, task, config, contentCache) : undefined;
+        const atlas = initial.accepted ? await buildRepositoryDesignAtlas(client, profile, task, config, contentCache, options.sourceAnalyzer) : undefined;
         const assessment = atlas ? applyAtlasCoverageGate(initial, atlas, config) : initial;
         automaticOutcomes.push({ assessment, atlas });
         if (assessment.accepted) acceptedAutomatic += 1;
@@ -107,6 +108,9 @@ export async function prepareReferencePack(
       automaticAtlases = automaticOutcomes.flatMap((outcome) => outcome.atlas ? [outcome.atlas] : []);
       if (acceptedSpecified.length === 0 && acceptedAutomatic === 0 && automaticProfileFailures.length > 0) {
         throw new Error(`Automatic discovery could not complete candidate profiling: ${automaticProfileFailures.slice(0, 3).join("; ")}`);
+      }
+      if (acceptedSpecified.length === 0 && acceptedAutomatic === 0 && automaticAtlases.some((atlas) => atlas.readFailures?.length && !atlas.coverage.sufficient)) {
+        throw new Error(`Architecture reads incomplete: ${automaticAssessments.flatMap((item) => item.rejectionReasons).join("; ")}`);
       }
     } catch (error) {
       if (acceptedSpecified.length === 0) throw error;

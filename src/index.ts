@@ -16,3 +16,4 @@ export * from "./atlas.ts";
 export * from "./bundle.ts";
 export * from "./task.ts";
 export * from "./types.ts";
+export * from "./source-analysis.ts";

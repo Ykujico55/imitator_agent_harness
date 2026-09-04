@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import type { EvidenceBundle, EvidenceKind, EvidenceSlice, HarnessConfig, RepositoryDesignAtlas } from "./types.ts";
-import { isTestPath } from "./evidence-path.ts";
+import { isTestPath, isTestSupportPath } from "./evidence-path.ts";
 
 const DOCUMENTATION = /(^|\/)(README|docs?|architecture|design|adr|rfcs?)(\/|\.|$)|(^|\/)(ADR|RFC)-?\d+/i;
 const DESIGN_DECISION = /(^|\/)(architecture|design|adr|rfcs?)(\/|\.|$)|(^|\/)(ADR|RFC)-?\d+/i;
-const MANIFEST = /(^|\/)(package\.json|pyproject\.toml|Cargo\.toml|go\.mod|pom\.xml|build\.gradle(?:\.kts)?)$/i;
+const MANIFEST = /(^|\/)(package\.json|pyproject\.toml|setup\.cfg|Cargo\.toml|go\.mod|pom\.xml|build\.gradle(?:\.kts)?)$/i;
 const FAILURE = /\b(error|errors|failure|failures|exception|exceptions|retry|timeout|abort|reject|invalid|panic|catch|throw)\b/i;
 
 export function supportsExplicitIntent(slice: Pick<EvidenceSlice, "path">): boolean {
@@ -13,6 +13,7 @@ export function supportsExplicitIntent(slice: Pick<EvidenceSlice, "path">): bool
 
 export function evidenceKind(slice: EvidenceSlice): EvidenceKind {
   if (MANIFEST.test(slice.path)) return "manifest";
+  if (isTestSupportPath(slice.path)) return "test-support";
   if (isTestPath(slice.path)) return "test";
   if (DOCUMENTATION.test(slice.path)) return "documentation";
   return "implementation";
@@ -63,6 +64,8 @@ function createBundle(input: {
   if (!explicit) limitations.push("No ADR, RFC, architecture, or design document supports an explicit rationale; treat intent as observed unless separately evidenced.");
   if (!relations.length) limitations.push("No resolved dependency relation connects the selected evidence within the bounded Atlas inspection.");
   if (!evidenceKinds.includes("test")) limitations.push("This bundle has no direct test evidence.");
+  if (relations.some((edge) => edge.resolution === "static-candidate")) limitations.push("Python relations identify static file candidates, not verified runtime imports; package exports can shadow from-import child modules.");
+  if (relations.some((edge) => edge.context?.length || edge.scope && edge.scope !== "module")) limitations.push("Some dependency observations are conditional, optional, type-only or local-scope; they are not unconditional runtime dependencies.");
   return {
     schemaVersion: 1,
     id: bundleId(input.atlas.repository, input.atlas.revision, input.concern, input.discriminator),
@@ -122,7 +125,7 @@ export function buildEvidenceBundles(
       concern: "testing-strategy",
       discriminator: "testing",
       question: "What behavior is verified at which boundary, and what acts as the observable test oracle?",
-      slices: repositorySlices.filter((slice) => testPaths.has(slice.path) || testedTargets.has(slice.path) || architecturePaths.has(slice.path)),
+      slices: repositorySlices.filter((slice) => testPaths.has(slice.path) || isTestSupportPath(slice.path) || testedTargets.has(slice.path) || architecturePaths.has(slice.path)),
       config,
     });
     add(testing);

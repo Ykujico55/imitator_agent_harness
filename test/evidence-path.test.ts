@@ -24,4 +24,9 @@ test("root behavioral tests earn named maturity/design signals but a test-plan d
   assert.equal(present.dimensions.designQuality.score - absent.dimensions.designQuality.score, 20);
   assert.ok(present.dimensions.engineeringMaturity.reasons.includes("Behavioral test files"));
   assert.ok(present.dimensions.designQuality.reasons.includes("Design is exercised by tests"));
+  const support = assess("tests/conftest.py");
+  assert.equal(support.dimensions.engineeringMaturity.score, absent.dimensions.engineeringMaturity.score);
+  assert.equal(support.dimensions.designQuality.score, absent.dimensions.designQuality.score);
+  assert.ok(!support.dimensions.engineeringMaturity.reasons.includes("Behavioral test files"));
+  assert.ok(!support.dimensions.designQuality.reasons.includes("Design is exercised by tests"));
 });

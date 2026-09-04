@@ -151,4 +151,6 @@ Pi 只是一层薄适配器：“参考发现”和 deterministic gate 仍是可
 
 ## 当前边界与后续演进
 
-见 [Design Dossier 协议](docs/design-dossier.md) 与 [架构和边界](docs/architecture.md)。当前已经实现 provider-neutral 的结构化协议、Repository Design Atlas、Evidence Bundle、事实/观察/推断/未知分级、Pi 双重持久门禁、人工/独立 judge 确认、TS/JS AST 切片和五阶段 paired A/B eval。Atlas 当前只解析 Node manifest 与 TS/JS 相对 import，其他生态仍以树结构索引；尚未产生真实模型实验数据。后续重点是本地项目同构 Atlas、更多语言 parser，以及跳出 GitHub 限额后运行 30–50 个真实任务的重复实验。
+Python 参考学习已增加可选的标准库 AST/TOML/INI 解析：读到内容才计算覆盖，源码/实际测试保底，条件导入与歧义保真，以及字段、协议/抽象类、导出、fixture 候选和 Poetry/setup.cfg 规格提取。Pi 需要可用的 Python 3.11+；不可用时明确报告，必要证据不足会阻断参考。配置和限制见 [Python 参考学习](docs/python-learning.md)。
+
+见 [Design Dossier 协议](docs/design-dossier.md) 与 [架构和边界](docs/architecture.md)。当前已经实现 provider-neutral 的结构化协议、Repository Design Atlas、Evidence Bundle、事实/观察/推断/未知分级、Pi 双重持久门禁、人工/独立 judge 确认、TS/JS 和可选 Python AST 切片及五阶段 paired A/B eval。Atlas 支持 Node manifest、TS/JS 相对 import，以及通过适配器注入的 Python 项目和导入结构；其他生态仍以树结构索引。尚未证明真实模型质量收益。后续重点是本地项目同构 Atlas、更多语言 parser，以及真实任务的受控对照实验。

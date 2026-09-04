@@ -12,15 +12,18 @@ import type {
 } from "./types.ts";
 import type { GitHubClient } from "./github.ts";
 import { taskTerms } from "./query.ts";
-import { isCodeFile, isImplementationPath, isTestPath } from "./evidence-path.ts";
+import { isCodeFile, isImplementationPath, isTestPath, isTestSupportPath, isPythonPackageMarker } from "./evidence-path.ts";
+import type { SourceAnalyzer, SourceAnalysis } from "./source-analysis.ts";
+import { pythonImportRoots, resolvePythonImport, resolvePythonModule } from "./python-relations.ts";
+import { hasSourceEvidence, hasTestEvidence } from "./coverage-evidence.ts";
+import { linkPythonFixtures } from "./python-fixtures.ts";
 
-const MANIFEST = /(^|\/)(package\.json|pyproject\.toml|Cargo\.toml|go\.mod|pom\.xml|build\.gradle(?:\.kts)?)$/i;
+const MANIFEST = /(^|\/)(package\.json|pyproject\.toml|setup\.cfg|Cargo\.toml|go\.mod|pom\.xml|build\.gradle(?:\.kts)?)$/i;
 const AUTOMATION = /^\.github\/workflows\/.*\.ya?ml$/i;
 const OVERVIEW = /(^|\/)README(?:\.[^/]*)?$/i;
 const DESIGN = /(^|\/)(architecture|design|adr|rfcs?)(\/|\.|$)|(^|\/)(ADR|RFC)-?\d+[^/]*\.md$/i;
 const SECURITY = /(^|\/)(SECURITY|THREAT_MODEL)(\.[^/]*)?$/i;
-const ENTRY = /(^|\/)(index|main|cli|server|app)\.[^/]+$/i;
-// Relationship extraction remains JS/TS-specific; structural coverage is language-neutral.
+const ENTRY = /(^|\/)(index|main|cli|server|app|__init__|__main__)\.[^/]+$/i;
 const SCRIPT_SOURCE = /\.[cm]?[jt]sx?$/i;
 const IMPORT_PATTERNS = [
   /(?:import|export)\s+(?:[^"']*?\s+from\s+)?["']([^"']+)["']/g,
@@ -66,7 +69,7 @@ function object(value: unknown): Record<string, unknown> {
 
 function manifestEcosystem(path: string): string {
   if (/package\.json$/i.test(path)) return "node";
-  if (/pyproject\.toml$/i.test(path)) return "python";
+  if (/pyproject\.toml$|setup\.cfg$/i.test(path)) return "python";
   if (/Cargo\.toml$/i.test(path)) return "rust";
   if (/go\.mod$/i.test(path)) return "go";
   if (/pom\.xml|build\.gradle/i.test(path)) return "jvm";
@@ -101,14 +104,15 @@ function parsePackageManifest(content: string): {
 
 function moduleRoot(path: string): { rootPath: string; kind: RepositoryDesignAtlas["modules"][number]["kind"] } | undefined {
   const parts = path.split("/");
+  if (isTestPath(path)) return { rootPath: parts.length > 1 ? parts[0]! : ".", kind: "test" };
   if ((parts[0] === "packages" || parts[0] === "apps") && parts[1]) {
     return { rootPath: `${parts[0]}/${parts[1]}`, kind: parts[0] === "apps" ? "application" : "package" };
   }
   if (parts[0] === "src" || parts[0] === "lib") {
     return { rootPath: parts.length > 2 ? `${parts[0]}/${parts[1]}` : parts[0], kind: "library" };
   }
-  if (isTestPath(path)) return { rootPath: parts.length > 1 ? parts[0]! : ".", kind: "test" };
   if (/(^|\/)(examples?|samples?)(\/|$)/i.test(path)) return { rootPath: parts.length > 1 ? parts[0]! : ".", kind: "example" };
+  if (/\.py$/i.test(path)) return { rootPath: parts.length > 1 ? parts[0]! : ".", kind: "library" };
   return undefined;
 }
 
@@ -176,6 +180,7 @@ export async function buildRepositoryDesignAtlas(
   task: TaskSpec,
   config: HarnessConfig,
   contentCache = new Map<string, string>(),
+  sourceAnalyzer?: SourceAnalyzer,
 ): Promise<RepositoryDesignAtlas> {
   const files = blobPaths(repository.tree);
   const fileSet = new Set(files);
@@ -187,30 +192,78 @@ export async function buildRepositoryDesignAtlas(
   const automationPaths = files.filter((path) => AUTOMATION.test(path));
   const terms = taskTerms(task).map((term) => term.toLowerCase());
 
-  const rankedStructuralFiles = unique([...manifestPaths, ...sourcePaths, ...testPaths]).sort((a, b) => {
+  const supportPaths = files.filter(isTestSupportPath);
+  const rankedStructuralFiles = unique([...manifestPaths, ...sourcePaths, ...testPaths, ...supportPaths, ...overviewPaths, ...designPaths, ...automationPaths]).sort((a, b) => {
     const score = (path: string): number =>
-      (MANIFEST.test(path) ? 100 : 0) + (ENTRY.test(path) ? 60 : 0) +
+      (MANIFEST.test(path) ? 100 : 0) + (ENTRY.test(path) && !isPythonPackageMarker(path) ? 60 : 0) +
       (terms.some((term) => path.toLowerCase().includes(term)) ? 30 : 0) + (isTestPath(path) ? 10 : 0) - path.split("/").length;
     return score(b) - score(a) || a.localeCompare(b);
   });
   const contents = new Map<string, string>();
+  const analyses = new Map<string, SourceAnalysis>();
+  let analysisCharacters = 0;
   const attemptedPaths = new Set<string>();
+  const completePaths = new Set<string>();
+  const readFailures: Array<{ path: string; reason: string }> = [];
+  const groups = { source: sourcePaths, test: testPaths, manifest: manifestPaths, overview: overviewPaths, design: designPaths, automation: automationPaths };
+  const qualified = (path: string, category: keyof typeof groups): boolean => {
+    if (!completePaths.has(path)) return false;
+    const content = contents.get(path)!;
+    return category === "source" ? hasSourceEvidence(path, content, analyses.get(path)) : category === "test" ? hasTestEvidence(path, content, analyses.get(path)) : Boolean(content.trim());
+  };
   let characters = 0;
-  for (const path of rankedStructuralFiles.slice(0, Math.max(0, config.atlas.maxFiles))) {
+  let cursor = 0;
+  const priorities: Array<keyof typeof groups> = ["source", "test", "manifest", "overview", "design", "automation"];
+  while (attemptedPaths.size < config.atlas.maxFiles) {
     if (characters >= config.atlas.maxTotalCharacters) break;
-    const entry = repository.tree.find((item) => item.type === "blob" && item.path === path);
-    if ((entry?.size ?? 0) > 120_000) continue;
+    const remainingPaths = rankedStructuralFiles.filter((path) => !attemptedPaths.has(path));
+    let path: string | undefined;
+    // Round-robin deficit repair prevents unreadable files in one category from
+    // starving all others. Every attempt, including failures, consumes budget.
+    for (let offset = 0; offset < priorities.length; offset++) {
+      const index = (cursor + offset) % priorities.length;
+      const category = priorities[index]!;
+      if (groups[category].some((item) => qualified(item, category))) continue;
+      const markerAttempts = [...attemptedPaths].filter(isPythonPackageMarker).length;
+      const candidates = remainingPaths.filter((item) => groups[category].includes(item) && (!isPythonPackageMarker(item) || markerAttempts < 2));
+      path = candidates.find((item) => !isPythonPackageMarker(item)) ?? candidates[0];
+      if (path) { cursor = (index + 1) % priorities.length; break; }
+    }
+    const markerCount = [...attemptedPaths].filter(isPythonPackageMarker).length;
+    path ??= remainingPaths.find((item) => !isPythonPackageMarker(item) || markerCount < 2);
+    if (!path) break;
     attemptedPaths.add(path);
+    const entry = repository.tree.find((item) => item.type === "blob" && item.path === path);
+    if ((entry?.size ?? 0) > 120_000) { readFailures.push({ path, reason: "file-size-budget" }); continue; }
     try {
       const content = await client.readTextFile(repository.fullName, path, repository.resolvedRevision);
-      if (content.includes("\0")) continue;
+      if (content.includes("\0")) { readFailures.push({ path, reason: "binary-content" }); continue; }
       contentCache.set(repositoryContentKey(repository.fullName, repository.resolvedRevision, path), content);
       const remaining = config.atlas.maxTotalCharacters - characters;
       const bounded = content.slice(0, remaining);
       contents.set(path, bounded);
+      if (bounded.length === content.length && content.trim()) completePaths.add(path);
+      else readFailures.push({ path, reason: content.trim() ? "content-truncated" : "empty-content" });
       characters += bounded.length;
-    } catch {
-      // Structural evidence is best-effort; coverage records what was actually available.
+      if (sourceAnalyzer) {
+        // Do not call a parser on a budget-truncated file and claim a complete AST.
+        if (bounded.length === content.length) {
+          try {
+            const analysis = sourceAnalyzer({ path, content });
+            if (analysis) {
+              const size = JSON.stringify(analysis).length;
+              if (analysisCharacters + size <= 40_000) { analyses.set(path, analysis); analysisCharacters += size; }
+              else analyses.set(path, { language: "python", parser: analysis.parser, status: "budget-exceeded", symbols: [], imports: [], limitations: ["Atlas syntax metadata budget exhausted; no further observations included."] });
+            }
+          } catch {
+            if (/\.py$|(^|\/)(pyproject\.toml|setup\.cfg)$/i.test(path)) analyses.set(path, { language: "python", parser: "adapter", status: "unavailable", symbols: [], imports: [], limitations: ["Source analysis adapter failed; structural fallback only."] });
+          }
+        } else if (/\.py$|(^|\/)(pyproject\.toml|setup\.cfg)$/i.test(path)) {
+          analyses.set(path, { language: "python", parser: "not-run", status: "budget-exceeded", symbols: [], imports: [], limitations: ["Atlas budget truncated this file; no AST or TOML parse claimed."] });
+        }
+      }
+    } catch (error) {
+      readFailures.push({ path, reason: error instanceof Error ? error.message : String(error) });
     }
   }
 
@@ -226,6 +279,14 @@ export async function buildRepositoryDesignAtlas(
     };
     const content = contents.get(path);
     if (!content) return { ...base, parseStatus: attemptedPaths.has(path) ? "unreadable" as const : "not-inspected" as const };
+    if (/pyproject\.toml$|setup\.cfg$/i.test(path)) {
+      const analysis = analyses.get(path);
+      if (analysis?.status === "parsed" && analysis.manifest) {
+        const { entryTargets: _entryTargets, ...manifest } = analysis.manifest;
+        return { ...base, ...manifest, parseStatus: manifest.completeness === "unsupported" ? "indexed" as const : manifest.completeness === "partial" ? "partial" as const : "parsed" as const };
+      }
+      return { ...base, parseStatus: analysis?.status === "invalid" ? "invalid" as const : "indexed" as const };
+    }
     if (!/package\.json$/i.test(path)) return { ...base, parseStatus: "indexed" as const };
     try {
       const parsed = parsePackageManifest(content);
@@ -237,6 +298,15 @@ export async function buildRepositoryDesignAtlas(
   });
 
   const entryPaths = new Set(sourcePaths.filter((path) => ENTRY.test(path)));
+  const pythonRoots = pythonImportRoots(fileSet, [...analyses].map(([path, analysis]) => ({ path, roots: analysis.manifest?.importRoots ?? [] })));
+  for (const [path, analysis] of analyses) if (analysis.manifest) {
+    const root = posix.dirname(path);
+    for (const entry of analysis.manifest.entryTargets) {
+      const localRoots = pythonImportRoots(new Set([path]), [{ path, roots: analysis.manifest.importRoots ?? [] }]).filter((item) => root === "." || item === root || item.startsWith(`${root}/`));
+      const target = resolvePythonModule(entry.split(":")[0]!, localRoots, fileSet);
+      if (target) entryPaths.add(target);
+    }
+  }
   for (const path of manifestPaths.filter((value) => /package\.json$/i.test(value))) {
     const content = contents.get(path);
     if (!content) continue;
@@ -271,13 +341,27 @@ export async function buildRepositoryDesignAtlas(
   })).sort((a, b) => a.rootPath.localeCompare(b.rootPath)).slice(0, 80);
 
   const relations = extractRelations(contents, fileSet, repository);
+  const unresolvedImports: NonNullable<RepositoryDesignAtlas["unresolvedImports"]> = [];
+  for (const [from, analysis] of analyses) if (analysis.status === "parsed") {
+    for (const item of analysis.imports) {
+      const resolution = resolvePythonImport(from, item, fileSet, pythonRoots);
+      if (resolution.reason && unresolvedImports.length < 200) unresolvedImports.push({ ...sourceRef(repository, from), module: ".".repeat(item.level) + item.module, line: item.line, reason: resolution.reason, scope: item.scope ?? "module", context: item.context ?? [] });
+      for (const to of resolution.targets) {
+      if (relations.length >= 500) break;
+      const kind = isTestPath(from) ? "tests" as const : "imports" as const;
+      if (!relations.some((edge) => edge.from === from && edge.to === to && edge.kind === kind && edge.evidence.sourceUrl.endsWith(`#L${item.line}`))) {
+        relations.push({ from, to, kind, resolution: "static-candidate", scope: item.scope ?? "module", context: item.context ?? [], aliases: item.aliases ?? [], evidence: { path: from, sourceUrl: `${sourceRef(repository, from).sourceUrl}#L${item.line}` } });
+      }
+      }
+    }
+  }
   const categories = {
-    overview: overviewPaths,
-    design: designPaths,
-    manifest: manifestPaths,
-    source: sourcePaths,
-    test: testPaths,
-    automation: automationPaths,
+    overview: overviewPaths.filter((path) => qualified(path, "overview")),
+    design: designPaths.filter((path) => qualified(path, "design")),
+    manifest: manifestPaths.filter((path) => qualified(path, "manifest")),
+    source: sourcePaths.filter((path) => qualified(path, "source")),
+    test: testPaths.filter((path) => qualified(path, "test")),
+    automation: automationPaths.filter((path) => qualified(path, "automation")),
   };
   const coverage = buildCoverage(repository, config, categories, relations);
   const architectureDocuments = unique([...overviewPaths, ...designPaths]).slice(0, 80).map((path) => ({
@@ -296,9 +380,14 @@ export async function buildRepositoryDesignAtlas(
     entryPoints,
     modules,
     relations,
+    unresolvedImports,
+    fixtureRelations: linkPythonFixtures(analyses),
+    readFailures,
+    coverageBasis: "read-content-v2",
     testFiles: testPaths.slice(0, 120).map((path) => sourceRef(repository, path)),
     automationFiles: automationPaths.slice(0, 40).map((path) => sourceRef(repository, path)),
     inspectedFiles: [...contents.keys()].sort().map((path) => sourceRef(repository, path)),
+    ...(sourceAnalyzer ? { sourceAnalyses: [...analyses].sort(([a], [b]) => a.localeCompare(b)).map(([path, analysis]) => ({ ...sourceRef(repository, path), ...analysis })) } : {}),
     coverage,
   };
 }
@@ -315,6 +404,7 @@ export function applyAtlasCoverageGate(
   if (atlas.coverage.missingRequiredCategories.length > 0) {
     rejectionReasons.push(`Missing required architecture evidence: ${atlas.coverage.missingRequiredCategories.join(", ")}`);
   }
+  if (!atlas.coverage.sufficient && atlas.readFailures?.length) rejectionReasons.push(`Architecture reads incomplete: ${atlas.readFailures.slice(0, 3).map((item) => `${item.path}: ${item.reason}`).join("; ")}`);
   return { ...assessment, atlasCoverage: atlas.coverage, accepted: rejectionReasons.length === 0, rejectionReasons };
 }
 
@@ -327,6 +417,7 @@ export function renderDesignAtlases(atlases: RepositoryDesignAtlas[]): string {
       `Revision: ${atlas.revision} · License: ${atlas.license ?? "unknown"} · Coverage: ${atlas.coverage.score}/100 (${atlas.coverage.sufficient ? "sufficient" : "insufficient"})`,
       "",
       `Present evidence: ${atlas.coverage.presentCategories.join(", ") || "none"}`,
+      `Coverage basis: ${atlas.coverageBasis ?? "legacy tree index; re-prepare for read-backed coverage"}`,
       `Missing required evidence: ${atlas.coverage.missingRequiredCategories.join(", ") || "none"}`,
       "",
       `Modules: ${atlas.modules.map((module) => `${module.rootPath} (${module.kind}, ${module.fileCount} files)`).join("; ") || "none"}`,
@@ -334,6 +425,20 @@ export function renderDesignAtlases(atlases: RepositoryDesignAtlas[]): string {
       `Architecture documents: ${atlas.architectureDocuments.map((document) => document.path).join(", ") || "none"}`,
       `Manifests: ${atlas.manifests.map((manifest) => `${manifest.path} [${manifest.ecosystem}/${manifest.parseStatus}]`).join(", ") || "none"}`,
       `Tests indexed: ${atlas.testFiles.length}; automation files: ${atlas.automationFiles.length}; resolved relations: ${atlas.relations.length}`,
+      "Resolved means a static file target, not verified runtime loading; modules and document lists above are tree indexes, not coverage claims.",
+      ...atlas.relations.filter((edge) => edge.scope !== undefined).map((edge) => `Static import ${edge.from} → ${edge.to}; scope: ${edge.scope}; context: ${edge.context?.join("; ") || "unconditional syntax"}; aliases: ${edge.aliases?.map((alias) => `${alias.name}${alias.asName ? ` as ${alias.asName}` : ""}`).join(", ") || "none"}; source: ${edge.evidence.sourceUrl}`),
+      ...(atlas.readFailures ?? []).map((item) => `Read incomplete ${item.path}: ${item.reason}`),
+      ...(atlas.sourceAnalyses ?? []).flatMap((analysis) => [
+        `Python syntax: ${analysis.path} [${analysis.status}] — ${analysis.symbols.length} declarations; ${analysis.imports.length} imports`,
+        `Limits: ${analysis.limitations.join("; ")}`,
+        `Exports: ${analysis.exports?.status ?? "unknown"} — ${analysis.exports?.names.join(", ") ?? ""}`,
+        ...analysis.symbols.flatMap((symbol) => [
+          `- ${symbol.name} [${symbol.kind}/${symbol.role}] ${analysis.path}:${symbol.startLine}-${symbol.endLine}; ${symbol.signature}; bases: ${symbol.bases.join(", ")}; traits: ${symbol.traits?.join(", ") ?? ""}; raises: ${symbol.raises.join(", ")}; catches: ${symbol.catches.join(", ")}; assertions: ${symbol.assertionCount}`,
+          ...(symbol.fields ?? []).map((field) => `  - ${field.kind} field ${field.name}: ${field.annotation} = ${field.defaultValue} (${analysis.path}:${field.line})`),
+        ]),
+      ]),
+      ...(atlas.unresolvedImports ?? []).map((item) => `Unresolved import ${item.path}:${item.line}: ${item.module} — ${item.reason}; ${item.context.join("; ")}`),
+      ...(atlas.fixtureRelations ?? []).map((item) => `Fixture ${item.testPath}:${item.testSymbol} requests ${item.request} → ${item.fixturePath ?? "?"}:${item.fixtureSymbol ?? "?"} [${item.status}]; ${item.reason}`),
       "",
     );
   }

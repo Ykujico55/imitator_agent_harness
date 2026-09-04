@@ -19,6 +19,9 @@ test("builds a commit-pinned design atlas with manifests, modules, entries, and 
     ],
   });
   const contents: Record<string, string> = {
+    "README.md": "Agent registry overview",
+    "docs/architecture.md": "Registry owns extension registration and lookup.",
+    ".github/workflows/check.yml": "name: check\njobs: {}\n",
     "package.json": JSON.stringify({ name: "agent", main: "src/index.ts", dependencies: { typebox: "1" }, devDependencies: { typescript: "5" }, scripts: { test: "node --test" } }),
     "src/index.ts": "export { Registry } from './registry';\n",
     "src/registry.ts": "export class Registry {}\n",

@@ -22,6 +22,7 @@ import type {
 } from "../../src/types.ts";
 import { FilePiStateStore, inspectWorkspace, type PersistedPiPayload, type PiStateStore } from "./state.ts";
 import { selectTypeScriptAstWindow } from "../typescript-ast.ts";
+import { createPythonAnalysis } from "../python-ast.ts";
 import { mutationGateSignal, type PiControllerPhase } from "./contract.ts";
 
 export { MUTATION_TOOL_DENY_LIST } from "./contract.ts";
@@ -83,7 +84,11 @@ export const defaultPiHarnessRuntime: PiHarnessRuntime = {
     const taskIdentity = await inspectWorkspace(input, cwd);
     const config = await loadConfig(await optionalConfigPath(cwd));
     const client = new GitHubClient({ token: process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN });
-    const pack = await prepareReferencePack(client, taskIdentity.task, config, { semanticSelector: selectTypeScriptAstWindow });
+    const python = createPythonAnalysis();
+    const pack = await prepareReferencePack(client, taskIdentity.task, config, {
+      sourceAnalyzer: python.analyze,
+      semanticSelector: (input) => python.selectWindow(input) ?? selectTypeScriptAstWindow(input),
+    });
     const directory = await writeReferencePack(pack, resolve(cwd, ".imitator", "reference"));
     return { pack, directory, config, taskIdentity };
   },
@@ -325,6 +330,10 @@ export class PiHarnessController {
         entryPoints: string[];
         architectureDocuments: string[];
         relations: number;
+        sourceAnalyses: NonNullable<ReferencePack["atlases"][number]["sourceAnalyses"]>;
+        unresolvedImports: ReferencePack["atlases"][number]["unresolvedImports"];
+        fixtureRelations: ReferencePack["atlases"][number]["fixtureRelations"];
+        coverageBasis: ReferencePack["atlases"][number]["coverageBasis"];
       };
       slices: Array<{ id: string; path: string; lines: string; reason: string }>;
       bundles: Array<{
@@ -379,6 +388,13 @@ export class PiHarnessController {
             entryPoints: candidate.atlas.entryPoints.map((item) => item.path),
             architectureDocuments: candidate.atlas.architectureDocuments.map((item) => item.path),
             relations: candidate.atlas.relations.length,
+            unresolvedImports: candidate.atlas.unresolvedImports?.slice(0, 12),
+            fixtureRelations: candidate.atlas.fixtureRelations?.slice(0, 12),
+            coverageBasis: candidate.atlas.coverageBasis,
+            sourceAnalyses: (candidate.atlas.sourceAnalyses ?? []).map((analysis) => ({
+              ...analysis, symbols: analysis.symbols.slice(0, 8), imports: analysis.imports.slice(0, 12),
+              limitations: [...analysis.limitations, "Prepare preview includes at most 8 declarations and 12 imports per file; full bounded observations are in the Design Atlas."],
+            })),
           },
           slices: candidate.slices.map((slice) => ({
             id: slice.id,

@@ -157,7 +157,7 @@ test("fails closed when indexed source and test files cannot become readable evi
     prepareReferencePack(new GitHubClient({ fetchImpl: fetchImpl as typeof fetch, apiBase: "https://mock.github" }), {
       task: "coding agent harness extension architecture", queries: ["coding agent harness"], language: "TypeScript",
     }, config),
-    /missing required implementation, test evidence slices.*rate limit exhausted/,
+    /Architecture reads incomplete:.*rate limit exhausted/,
   );
 });
 
@@ -204,7 +204,7 @@ test("stops profiling and atlas construction after the bounded learning set is f
   const config = structuredClone(defaultConfig);
   config.slicing.maxRepositories = 1;
   config.slicing.maxFilesPerRepository = 4;
-  config.atlas.maxFiles = 2;
+  config.atlas.maxFiles = 3;
   const pack = await prepareReferencePack(new GitHubClient({ fetchImpl: fetchImpl as typeof fetch, apiBase: "https://mock.github" }), {
     task: "coding agent harness extension architecture", queries: ["coding agent harness"], language: "TypeScript",
   }, config);

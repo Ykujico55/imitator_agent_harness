@@ -4,14 +4,15 @@ import type { GitHubClient } from "./github.ts";
 import { taskTerms } from "./query.ts";
 import { learningRepositoryLimit } from "./reference.ts";
 import { repositoryContentKey } from "./atlas.ts";
-import { isCodeFile, isImplementationPath, isTestPath } from "./evidence-path.ts";
+import { isCodeFile, isImplementationPath, isTestPath, isTestSupportPath, isPythonPackageMarker } from "./evidence-path.ts";
+import { hasSourceEvidence, hasTestEvidence } from "./coverage-evidence.ts";
 
 export type SliceWindow = {
   start: number;
   end: number;
   content: string;
   relevance: number;
-  strategy: "line-window" | "typescript-ast";
+  strategy: "line-window" | "typescript-ast" | "python-ast";
   symbols?: string[];
 };
 
@@ -29,10 +30,10 @@ export type SliceReadFailure = {
 };
 
 const EXCLUDED = /(^|\/)(node_modules|vendor|dist|build|coverage|fixtures?|snapshots?|generated|\.vscode|\.idea|\.agents)(\/|$)|(^|\/)(AGENTS|CLAUDE)\.md$|^\.github\/(copilot-instructions|instructions)(\/|\.|$)|\.(lock|min\.(js|css)|map|png|jpe?g|gif|pdf|zip|wasm)$|\.i18n\.ya?ml$/i;
-const TEXT_FILE = /(^|\/)(README|ARCHITECTURE|DESIGN|CONTRIBUTING|SECURITY)(\.[^/]*)?$|\.(md|mdx|ts|tsx|js|jsx|py|rs|go|java|kt|rb|toml|ya?ml|json)$/i;
+const TEXT_FILE = /(^|\/)(README|ARCHITECTURE|DESIGN|CONTRIBUTING|SECURITY)(\.[^/]*)?$|\.(md|mdx|ts|tsx|js|jsx|py|rs|go|java|kt|rb|toml|cfg|ya?ml|json)$/i;
 const DESIGN_PATH = /(^|\/)(architecture|design|adr)(\/|\.|$)|(^|\/)(rfcs?)(\/|$)|(^|\/)(RFC-\d+|ADR-\d+)[^/]*\.md$/i;
 const README_PATH = /(^|\/)README(?:\.[^/]*)?$/i;
-const MANIFEST_PATH = /(^|\/)(package\.json|pyproject\.toml|Cargo\.toml|go\.mod|pom\.xml|build\.gradle(?:\.kts)?)$/i;
+const MANIFEST_PATH = /(^|\/)(package\.json|pyproject\.toml|setup\.cfg|Cargo\.toml|go\.mod|pom\.xml|build\.gradle(?:\.kts)?)$/i;
 
 export function rankPaths(tree: TreeEntry[], terms: string[], preferredPaths = new Set<string>()): Array<{ entry: TreeEntry; score: number; reason: string }> {
   return tree
@@ -48,7 +49,8 @@ export function rankPaths(tree: TreeEntry[], terms: string[], preferredPaths = n
       if (README_PATH.test(path)) { score += 28; reasons.push("project overview"); }
       if (/(^|\/)(examples?|samples?)(\/|$)/i.test(path)) { score += 18; reasons.push("usage example"); }
       if (isTestPath(path)) { score += 12; reasons.push("behavioral evidence"); }
-      if (isCodeFile(path) && !isTestPath(path)) { score += 8; reasons.push("implementation source"); }
+      if (isTestSupportPath(path)) { score += 6; reasons.push("test-support evidence, not a test case"); }
+      if (isCodeFile(path) && !isTestPath(path) && !isTestSupportPath(path)) { score += 8; reasons.push("implementation source"); }
       score -= path.split("/").length * 0.5;
       return { entry, score, reason: reasons.join("; ") || "representative source" };
     })
@@ -72,8 +74,9 @@ function pathFamily(path: string): string {
     .replace(/\.(mdx?|ya?ml|json)$/, "");
 }
 
-function evidenceModality(path: string): "documentation" | "manifest" | "implementation" | "test" {
-  if (/(^|\/)(test|tests|spec|__tests__)(\/|$)/i.test(path)) return "test";
+function evidenceModality(path: string): "documentation" | "manifest" | "implementation" | "test" | "test-support" {
+  if (isTestSupportPath(path)) return "test-support";
+  if (isTestPath(path)) return "test";
   if (MANIFEST_PATH.test(path)) return "manifest";
   if (DESIGN_PATH.test(path) || README_PATH.test(path)) return "documentation";
   return "implementation";
@@ -153,8 +156,15 @@ export async function collectSlices(
       ...(atlas?.entryPoints.map((item) => item.path) ?? []),
       ...(atlas?.manifests.map((item) => item.path) ?? []),
       ...(atlas?.architectureDocuments.map((item) => item.path) ?? []),
+      ...(atlas?.coverage.signals.filter((signal) => signal.name === "source-evidence" || signal.name === "test-evidence").flatMap((signal) => signal.sources.map((item) => item.path)) ?? []),
     ]);
-    const ranked = diversifyPaths(rankPaths(repo.tree, terms, preferredPaths), config.slicing.maxFilesPerRepository);
+    const inspectedPython = new Map(atlas?.sourceAnalyses?.map((item) => [item.path, item]) ?? []);
+    const candidates = rankPaths(repo.tree, terms, preferredPaths).filter((candidate) => {
+      if (!isPythonPackageMarker(candidate.entry.path)) return true;
+      const analysis = inspectedPython.get(candidate.entry.path);
+      return !analysis || hasSourceEvidence(candidate.entry.path, "inspected", analysis);
+    }).sort((a, b) => Number(isPythonPackageMarker(a.entry.path)) - Number(isPythonPackageMarker(b.entry.path)) || b.score - a.score || a.entry.path.localeCompare(b.entry.path));
+    const ranked = diversifyPaths(candidates, config.slicing.maxFilesPerRepository);
     for (const candidate of ranked) {
       if (slices.length >= config.slicing.maxSlices || characters >= config.slicing.maxTotalCharacters) return slices;
       try {
@@ -176,8 +186,15 @@ export async function collectSlices(
         const window = semanticWindow ?? selectLineWindow(text, terms, config.slicing.maxLinesPerSlice);
         const remaining = config.slicing.maxTotalCharacters - characters;
         if (remaining < 200) return slices;
-        if (window.strategy === "typescript-ast" && window.content.length > remaining) return slices;
+        if (window.strategy !== "line-window" && window.content.length > remaining) continue;
         const content = window.content.slice(0, remaining);
+        if (/\.py$/i.test(candidate.entry.path) && isTestPath(candidate.entry.path)) {
+          const analysis = inspectedPython.get(candidate.entry.path);
+          // Only declarations actually contained in this window can satisfy the
+          // test floor. Custom assertion helpers are valid AST test bodies too.
+          const windowAnalysis = analysis ? { ...analysis, symbols: analysis.symbols.filter((symbol) => symbol.startLine >= window.start && symbol.endLine <= window.end) } : undefined;
+          if (window.strategy !== "python-ast" && !hasTestEvidence(candidate.entry.path, content, windowAnalysis)) continue;
+        }
         characters += content.length;
         const id = createHash("sha256")
           .update(`${repo.fullName}\0${repo.resolvedRevision}\0${candidate.entry.path}\0${window.start}\0${window.end}`)
@@ -194,7 +211,7 @@ export async function collectSlices(
           endLine: window.end,
           sourceUrl: `${repo.htmlUrl}/blob/${encodeURIComponent(repo.resolvedRevision)}/${candidate.entry.path.split("/").map(encodeURIComponent).join("/")}#L${window.start}-L${window.end}`,
           relevance: Math.round(candidate.score + window.relevance),
-          reason: window.symbols?.length ? `${candidate.reason}; semantic symbols ${window.symbols.join(", ")}` : candidate.reason,
+          reason: window.symbols?.length ? `${candidate.reason}; ${window.strategy} complete declaration; semantic symbols ${window.symbols.join(", ")}` : candidate.reason,
           content,
           strategy: window.strategy,
           symbols: window.symbols,

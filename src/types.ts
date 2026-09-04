@@ -1,3 +1,5 @@
+import type { SourceAnalysis } from "./source-analysis.ts";
+
 export type TaskSpec = {
   task: string;
   domain?: TaskDomainSpec;
@@ -111,7 +113,7 @@ export type RepositoryDesignAtlas = {
     path: string;
     sourceUrl: string;
     ecosystem: string;
-    parseStatus: "parsed" | "indexed" | "invalid" | "unreadable" | "not-inspected";
+    parseStatus: "parsed" | "partial" | "indexed" | "invalid" | "unreadable" | "not-inspected";
     packageName?: string;
     dependencies: string[];
     developmentDependencies: string[];
@@ -133,10 +135,19 @@ export type RepositoryDesignAtlas = {
     to: string;
     kind: "imports" | "tests";
     evidence: AtlasSourceRef;
+    scope?: string;
+    context?: string[];
+    aliases?: Array<{ name: string; asName: string | null }>;
+    resolution?: "static-candidate";
   }>;
+  unresolvedImports?: Array<AtlasSourceRef & { module: string; line: number; reason: string; scope: string; context: string[] }>;
+  fixtureRelations?: Array<{ testPath: string; testSymbol: string; fixturePath?: string; fixtureSymbol?: string; request: string; status: "candidate" | "unresolved"; reason: string }>;
+  readFailures?: Array<{ path: string; reason: string }>;
+  coverageBasis?: "read-content-v2";
   testFiles: AtlasSourceRef[];
   automationFiles: AtlasSourceRef[];
   inspectedFiles: AtlasSourceRef[];
+  sourceAnalyses?: Array<AtlasSourceRef & SourceAnalysis>;
   coverage: AtlasCoverage;
 };
 
@@ -172,13 +183,13 @@ export type EvidenceSlice = {
   relevance: number;
   reason: string;
   content: string;
-  strategy?: "line-window" | "typescript-ast";
+  strategy?: "line-window" | "typescript-ast" | "python-ast";
   symbols?: string[];
 };
 
 export type EpistemicStatus = "explicit" | "observed" | "inferred" | "unknown";
 
-export type EvidenceKind = "documentation" | "implementation" | "test" | "manifest" | "relationship";
+export type EvidenceKind = "documentation" | "implementation" | "test" | "test-support" | "manifest" | "relationship";
 
 export type EvidenceBundle = {
   schemaVersion: 1;
