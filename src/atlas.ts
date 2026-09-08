@@ -379,6 +379,7 @@ export async function buildRepositoryDesignAtlas(
   const relations = extractRelations(contents, fileSet, repository);
   const unresolvedImports: NonNullable<RepositoryDesignAtlas["unresolvedImports"]> = [];
   for (const [from, analysis] of analyses) if (analysis.status === "parsed") {
+    if (analysis.language !== "python" && analysis.language !== "rust") continue;
     for (const item of analysis.imports) {
       const resolution = analysis.language === "rust" ? resolveRustImport(from, item, fileSet) : resolvePythonImport(from, item, fileSet, pythonRoots);
       if (resolution.reason && unresolvedImports.length < 200) unresolvedImports.push({ ...sourceRef(repository, from), module: ".".repeat(item.level) + item.module, line: item.line, reason: resolution.reason, scope: item.scope ?? "module", context: item.context ?? [] });

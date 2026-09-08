@@ -20,7 +20,7 @@
    搜索命中但候选画像因限额或网络错误无法完成时整次运行失败并保留错误原因，不得把不完整检查解释为“没有合适参考”。
 4. Assessor 给六个维度打 0–100 分，其中风险越高越差；领域最低分、总分和非许可证风险是硬门禁。许可证独立提示，默认 `warn`，仅显式 `allowlist` 模式实施许可证硬门禁。无论配置如何，进入 evidence space 的仓库硬限制为 1–2 个。
 5. Atlas builder 在固定文件/字符预算内建立 commit-pinned 仓库地图：manifest、模块、入口、设计文档、测试、CI 与可解析的相对依赖关系。七个命名信号形成可解释模态覆盖分，缺少配置要求的源码/测试证据时 fail closed；独立的 analysisQuality 再描述 textual、syntactic、resolved、corroborated 强度，不修改仓库设计评分。
-6. 逐文件 Source Router 根据路径确定唯一深度适配器；Python、Rust、TS/JS 各走自己的静态能力，多语言仓库不会被主语言标签误导。已支持语言解析失败不串到其他 parser，未知或歧义路径 fail closed 到结构/行窗口。Slicer 再使用 Atlas 中的入口、manifest 和设计文档作为结构优先级，并在紧预算下保底选择 documentation、manifest、test、implementation 等关键模态；预算在字符层硬截止。Atlas 要求的 source/test 等类别若未形成可读切片则 fail closed。
+6. 逐文件 Source Router 根据路径确定唯一深度适配器；Python、Rust、TS/JS 各走自己的静态能力，多语言仓库不会被主语言标签误导。已支持语言解析失败不串到其他 parser，未知或歧义路径 fail closed 到结构/行窗口。Slicer 使用 Atlas 中的入口、manifest 和设计文档作为结构优先级，并让解析观察在单文件内补足契约、数据模型、失败、扩展点和测试等角色，最多保留四个互不重叠的完整语义窗口；紧预算下仍保底选择 documentation、manifest、test、implementation 等关键模态，字符层硬截止。
 7. Bundle compiler 围绕系统架构、模块边界、技术选型、测试策略和失败语义，把不同模态的切片与 Atlas 关系编译为有界证据包。单一模态不足时不制造关系结论；每个包记录限制与 `explicit|observed` 认识论上限。
 8. Renderer 生成机器可读 manifest、Design Atlas、Evidence Bundle、指定仓库评估结果、防提示注入的 agent 工作协议和 pack-bound 评审请求。未通过覆盖门禁的候选仅保留评分记录，其 Atlas 不进入学习产物。
 9. 人或外部 judge 先检查证据包再提交结构化决策；deterministic gate 校验 fingerprint、包/切片归属、置信度、风险和审查完整性，并再次限制最多两个仓库。
@@ -70,7 +70,7 @@ Design Dossier 是第二层压缩与判断协议：它先写入 `design-proposal
 
 ## Semantic slicing
 
-Provider-neutral core 接受注入式 `SemanticSliceSelector`，本身保留零依赖的确定性行窗口。Pi adapter 注入 TypeScript 5.9 compiler AST selector，对 TS、TSX、JS、JSX、MTS、CTS 等选择预算内的完整 interface、type、enum、class、function、method、variable statement 或测试调用，并记录 strategy 与 symbol。没有合适 AST 单元或语言不支持时回退到原行窗口。
+Provider-neutral core 接受注入式 `SourceRouter`，本身保留零依赖的确定性行窗口。Pi adapter 用 TypeScript 5.9 compiler AST 对 TS、TSX、JS、JSX、MTS、CTS 等提取声明、公开面、字段、继承/implements、import alias/type-only 条件、throw/catch 和测试调用，并选择预算内的完整 interface、type、enum、class、function、method、variable statement或测试调用。它不运行 TypeChecker。Python/Rust 与 TS/JS 的 `SourceAnalysis` 都能驱动多角色补充切片；没有合适 AST 单元或语言不支持时回退到原行窗口。
 
 Pi 同时注入可选 Python 标准库解析器，通过 `SourceAnalyzer` 向 Atlas 提供语法观察并复用到 `python-ast` 切片。解释器只解析 stdin 文本，不执行上游代码；缺失、超时、语法或预算问题明确降级。详见 [Python 参考学习](python-learning.md)。
 
@@ -82,7 +82,7 @@ Pi 同时注入可选 Python 标准库解析器，通过 `SourceAnalyzer` 向 At
 
 ## Repository Design Atlas
 
-Atlas 是切片前的确定性结构层，不是第二份源码上下文。它只从 GitHub tree 和固定到 commit SHA 的有限文本读取中生成，记录来源路径和链接，不执行任何上游内容。当前能解析 Node manifest、常规入口和 TS/JS 相对 import；注入 Python 适配器后可解析静态 pyproject 元数据、声明和常规包布局下的静态 import，并把测试 import 标为 `tests` 关系；其他语言保留 manifest、目录、设计文档、测试与自动化索引。
+Atlas 是切片前的确定性结构层，不是第二份源码上下文。它只从 GitHub tree 和固定到 commit SHA 的有限文本读取中生成，记录来源路径和链接，不执行任何上游内容。当前能解析 Node manifest、常规入口、TS/JS 相对 import 与静态声明；Python 适配器可解析 pyproject/setup.cfg 元数据、声明和常规包布局下的静态 import，并把测试 import 标为 `tests` 关系；Rust 适配器提供 Cargo、声明和文件系统 module candidate。其他语言保留 manifest、目录、设计文档、测试与自动化索引。
 
 覆盖分由 overview 10、design 20、manifest 10、source 20、test 20、automation 10、relationships 10 七个具名信号相加。新 Atlas 使用 `read-content-v2`：类别必须有完整读取的非空内容；Python 还要求声明/实际测试体观察，conftest 不充当测试。源码与测试优先保底，预算内按缺口补读，最多尝试两个 Python 包入口，失败和截断可追溯。默认门禁为至少 50 分且必须存在 source/test；配置只能在已知类别内选择，文件和字符预算有硬上限。覆盖充分只说明“有足够结构证据可供审查”，不证明架构优秀，也不证明模型推断出的设计理由真实。
 

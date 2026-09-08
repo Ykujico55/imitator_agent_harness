@@ -211,10 +211,10 @@ review-proposal/APPROVED_EVIDENCE_BUNDLES.md
 发送普通消息：
 
 ```text
-继续蒸馏 Design Dossier。区分 explicit、observed、inferred 和 unknown，完成本地 adopt/adapt/reject 映射并提交设计方案。
+先调用 imitator_get_semantic_blueprint 阅读已确认参考的模块、契约、关系、失败语义、测试结构和负空间索引，再按其中的 Bundle/Slice ID 验证相关证据。然后蒸馏 Design Dossier：区分 explicit、observed、inferred 和 unknown，把每个非 unknown claim 绑定到 Blueprint observation 与底层证据，完成本地 adopt/adapt/reject 映射并提交设计方案。
 ```
 
-模型应调用 `imitator_submit_design_dossier`。确定性校验通过后，状态进入 `awaiting_design_confirmation`。
+模型应先调用 `imitator_get_semantic_blueprint`，再调用必要的证据工具和 `imitator_submit_design_dossier`。确定性校验通过后，状态进入 `awaiting_design_confirmation`。
 
 ### 6.4 第二次人工确认：设计方案
 

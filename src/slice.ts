@@ -7,6 +7,7 @@ import { repositoryContentKey } from "./atlas.ts";
 import { isCodeFile, isImplementationPath, isTestPath, isTestSupportPath, isPythonPackageMarker, isRustBuildSupportPath } from "./evidence-path.ts";
 import { hasSourceEvidence, hasTestEvidence } from "./coverage-evidence.ts";
 import type { SourceRouteDecision, SourceRouteResolver } from "./source-routing.ts";
+import type { SourceAnalysis, SourceSymbol } from "./source-analysis.ts";
 
 export type SliceWindow = {
   start: number;
@@ -35,6 +36,69 @@ const TEXT_FILE = /(^|\/)(README|ARCHITECTURE|DESIGN|CONTRIBUTING|SECURITY)(\.[^
 const DESIGN_PATH = /(^|\/)(architecture|design|adr)(\/|\.|$)|(^|\/)(rfcs?)(\/|$)|(^|\/)(RFC-\d+|ADR-\d+)[^/]*\.md$/i;
 const README_PATH = /(^|\/)README(?:\.[^/]*)?$/i;
 const MANIFEST_PATH = /(^|\/)(package\.json|pyproject\.toml|setup\.cfg|Cargo\.toml|go\.mod|pom\.xml|build\.gradle(?:\.kts)?)$/i;
+export const MAX_SEMANTIC_WINDOWS_PER_FILE = 4;
+
+type ArchitectureRole = "contract" | "data-model" | "failure" | "extension-point" | "test";
+
+function architectureRoles(symbol: SourceSymbol): ArchitectureRole[] {
+  const roles: ArchitectureRole[] = [];
+  if (["class", "struct", "union", "enum", "trait", "impl", "type"].includes(symbol.kind)) roles.push("contract");
+  if ((symbol.fields?.length ?? 0) > 0 || (symbol.variants?.length ?? 0) > 0) roles.push("data-model");
+  if (symbol.raises.length || symbol.catches.length || (symbol.errorSignals?.length ?? 0) > 0 || (symbol.unsafeCount ?? 0) > 0) roles.push("failure");
+  if (symbol.kind === "trait" || symbol.kind === "impl" || symbol.bases.some((base) => /protocol|abstract|abc/i.test(base))) roles.push("extension-point");
+  if (symbol.role === "test" || symbol.role === "fixture") roles.push("test");
+  return roles;
+}
+
+function overlaps(a: Pick<SliceWindow, "start" | "end">, b: Pick<SliceWindow, "start" | "end">): boolean {
+  return a.start <= b.end && b.start <= a.end;
+}
+
+/**
+ * Selects complete declarations for architecture roles not already represented by
+ * the primary task-relevant window. Parser observations drive evidence selection;
+ * they do not add design-quality points or claim runtime behavior.
+ */
+export function selectSupplementalSemanticWindows(
+  analysis: SourceAnalysis | undefined,
+  content: string,
+  primary: SliceWindow,
+  maxLines: number,
+  maximumWindows = MAX_SEMANTIC_WINDOWS_PER_FILE,
+): SliceWindow[] {
+  if (!analysis || analysis.status !== "parsed" || maximumWindows <= 1
+    || analysis.language !== "python" && analysis.language !== "rust" && analysis.language !== "typescript") return [];
+  const lines = content.replace(/\r\n/g, "\n").split("\n");
+  const strategy = analysis.language === "python" ? "python-ast" as const
+    : analysis.language === "rust" ? "rust-syntax" as const : "typescript-ast" as const;
+  const selected: SliceWindow[] = [primary];
+  const represented = new Set(analysis.symbols.filter((symbol) => symbol.startLine >= primary.start && symbol.endLine <= primary.end).flatMap(architectureRoles));
+  const priorities: ArchitectureRole[] = ["contract", "data-model", "failure", "extension-point", "test"];
+  for (const role of priorities) {
+    if (selected.length >= Math.max(1, Math.min(MAX_SEMANTIC_WINDOWS_PER_FILE, maximumWindows))) break;
+    if (represented.has(role)) continue;
+    const symbol = analysis.symbols
+      .filter((item) => architectureRoles(item).includes(role) && item.hasBody !== false && item.endLine - item.startLine + 1 <= maxLines)
+      .sort((a, b) => {
+        const aPublic = Number(!a.name.startsWith("_") && (analysis.language !== "rust" || (a.visibility ?? "").startsWith("pub")));
+        const bPublic = Number(!b.name.startsWith("_") && (analysis.language !== "rust" || (b.visibility ?? "").startsWith("pub")));
+        return bPublic - aPublic || a.startLine - b.startLine || a.name.localeCompare(b.name);
+      })
+      .find((item) => !selected.some((window) => overlaps(window, { start: item.startLine, end: item.endLine })));
+    if (!symbol) continue;
+    const window: SliceWindow = {
+      start: symbol.startLine,
+      end: symbol.endLine,
+      content: lines.slice(symbol.startLine - 1, symbol.endLine).join("\n"),
+      relevance: role === "test" ? 7 : role === "failure" ? 6 : role === "extension-point" ? 5 : role === "data-model" ? 4 : 3,
+      strategy,
+      symbols: [symbol.name],
+    };
+    selected.push(window);
+    architectureRoles(symbol).forEach((item) => represented.add(item));
+  }
+  return selected.slice(1);
+}
 
 export function rankPaths(tree: TreeEntry[], terms: string[], preferredPaths = new Set<string>()): Array<{ entry: TreeEntry; score: number; reason: string }> {
   return tree
@@ -200,15 +264,10 @@ export async function collectSlices(
         }
         const primary = semanticWindow ?? selectLineWindow(text, terms, config.slicing.maxLinesPerSlice);
         const analysis = inspectedAnalyses.get(candidate.entry.path);
-        const windows: SliceWindow[] = [primary];
-        if (/\.rs$/i.test(candidate.entry.path) && analysis?.language === "rust" && analysis.status === "parsed") {
-          const covered = new Set(analysis.symbols.filter((symbol) => symbol.startLine >= primary.start && symbol.endLine <= primary.end).map((symbol) => symbol.role === "test" ? "test" : symbol.kind === "module" ? "other" : "implementation"));
-          for (const role of ["implementation", "test"] as const) {
-            if (covered.has(role)) continue;
-            const symbol = analysis.symbols.find((item) => (role === "test" ? item.role === "test" : item.role === "implementation" && item.kind !== "module") && item.hasBody !== false && item.endLine - item.startLine + 1 <= config.slicing.maxLinesPerSlice);
-            if (symbol) windows.push({ start: symbol.startLine, end: symbol.endLine, content: text.replace(/\r\n/g, "\n").split("\n").slice(symbol.startLine - 1, symbol.endLine).join("\n"), relevance: 0, strategy: "rust-syntax", symbols: [symbol.name] });
-          }
-        }
+        const windows: SliceWindow[] = [
+          primary,
+          ...selectSupplementalSemanticWindows(analysis, text, primary, config.slicing.maxLinesPerSlice),
+        ];
         for (const window of windows) {
           if (slices.length >= config.slicing.maxSlices) return slices;
           const remaining = config.slicing.maxTotalCharacters - characters;
@@ -221,7 +280,8 @@ export async function collectSlices(
             if (window.strategy !== "python-ast" && !hasTestEvidence(candidate.entry.path, content, windowAnalysis)) continue;
           }
           if (/\.rs$/i.test(candidate.entry.path) && analysis?.symbols.some((symbol) => symbol.role === "test") && window.strategy !== "rust-syntax") continue;
-          const evidenceRoles = /\.rs$/i.test(candidate.entry.path) ? [...new Set(windowSymbols.flatMap((symbol) => symbol.role === "test" ? ["test" as const] : symbol.kind !== "module" ? ["implementation" as const] : []))] : undefined;
+          const evidenceRoles = analysis ? [...new Set(windowSymbols.flatMap((symbol) => symbol.role === "test" ? ["test" as const]
+            : symbol.role === "implementation" && symbol.kind !== "module" ? ["implementation" as const] : []))] : undefined;
           characters += content.length;
         const id = createHash("sha256")
           .update(`${repo.fullName}\0${repo.resolvedRevision}\0${candidate.entry.path}\0${window.start}\0${window.end}`)

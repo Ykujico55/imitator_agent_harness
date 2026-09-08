@@ -8,10 +8,12 @@ Pi 不再按 `Python → Rust → TypeScript` 顺序试探解析器。每个文�
 |---|---|---|
 | `.py`、`pyproject.toml`、`setup.cfg` | `python-stdlib-ast` | 静态语法/manifest 分析；Python 源码完整声明切片 |
 | `.rs`、`Cargo.toml` | `rust-static-syntax` | 静态语法/manifest 分析；Rust 完整声明切片 |
-| TS/JS/TSX/JSX/MTS/CTS/MJS/CJS | `typescript-compiler-ast` | 完整语义单元切片 |
+| TS/JS/TSX/JSX/MTS/CTS/MJS/CJS | `typescript-compiler-ast` | 静态语法分析；完整语义单元切片 |
 | 其他文件 | `structural-fallback` | Atlas 通用结构索引与确定性行窗口 |
 
 路由只表示选中了什么能力，不表示解析成功。已支持语言返回 `invalid`、`unavailable` 或 `budget-exceeded` 时，不会继续拿另一种语言的 parser 猜测；切片可退回 `line-window`，Atlas 仍保留原失败状态。若两个扩展适配器同时声明同一路径，路由以 `ambiguous` fail closed，两个解析器都不运行。
+
+TS/JS、Python 和 Rust 都同时提供 Atlas syntax analysis 与 semantic slicing。TS/JS 观察声明、公开面、字段、继承/implements、静态 import 别名和 type-only 条件、throw/catch 及测试调用；它不运行 TypeChecker，因此不声称完成类型绑定、overload、control-flow 或运行时分派。
 
 `DESIGN_ATLAS.json` 的 `sourceRoutes` 记录 `selectedAnalyzer`、具名 `routeReason`、能力、解析状态与预定 fallback。每个 evidence slice 的 `sourceRoute` 还记录实际得到 `semantic-window` 还是 `line-window-fallback`。这些字段进入 Pi prepare 预览和 judge 的 review request。
 

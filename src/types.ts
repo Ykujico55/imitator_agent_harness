@@ -252,6 +252,55 @@ export type EvidenceBundle = {
   limitations: string[];
 };
 
+export type SemanticBlueprintSection =
+  | "modules"
+  | "contracts"
+  | "dataModels"
+  | "relationships"
+  | "failureSemantics"
+  | "testConcepts"
+  | "extensionPoints"
+  | "negativeSpace";
+
+export type SemanticBlueprintObservation = {
+  id: string;
+  section: SemanticBlueprintSection;
+  /** A bounded static observation, never a recovered design intention. */
+  summary: string;
+  paths: string[];
+  symbols: string[];
+  evidenceStrength: EvidenceStrength;
+  evidenceSliceIds: string[];
+  evidenceBundleIds: string[];
+  limitations: string[];
+};
+
+export type ReferenceSemanticBlueprint = {
+  schemaVersion: 1;
+  repository: string;
+  repositoryUrl: string;
+  revision: string;
+  license: string | null;
+  generatedFrom: "approved-atlas-bundles-and-slices";
+  observationalOnly: true;
+  budget: {
+    maximumObservations: number;
+    selectedObservations: number;
+    omittedObservations: number;
+  };
+  sections: Record<SemanticBlueprintSection, SemanticBlueprintObservation[]>;
+  sources: Array<{
+    sliceId: string;
+    path: string;
+    lines: string;
+    sourceUrl: string;
+    license: string | null;
+    evidenceStrength: EvidenceStrength;
+    bundleIds: string[];
+  }>;
+  limitations: string[];
+};
+
 export type HarnessConfig = {
   github: {
     minimumStars: number;
@@ -390,6 +439,8 @@ export type DesignClaim = {
   evidenceBundleIds: string[];
   evidenceSliceIds: string[];
   counterEvidenceSliceIds: string[];
+  /** Navigation observations used to interpret the cited source evidence. */
+  blueprintObservationIds: string[];
   limitations: string[];
 };
 
@@ -486,6 +537,7 @@ export type DesignDossierRequest = {
   }>;
   atlases: RepositoryDesignAtlas[];
   bundles: EvidenceBundle[];
+  semanticBlueprints: ReferenceSemanticBlueprint[];
   evidenceIndex: Array<{
     id: string;
     repository: string;
@@ -494,6 +546,11 @@ export type DesignDossierRequest = {
     reason: string;
     sourceUrl: string;
     license: string | null;
+    strategy?: SliceStrategy;
+    symbols?: string[];
+    evidenceRoles?: EvidenceSlice["evidenceRoles"];
+    sourceRoute?: SliceSourceRoute;
+    evidenceStrength?: EvidenceStrengthRecord;
   }>;
   requirements: string[];
 };

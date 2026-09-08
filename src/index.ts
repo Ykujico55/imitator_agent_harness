@@ -20,3 +20,4 @@ export * from "./source-analysis.ts";
 export * from "./source-routing.ts";
 export * from "./analysis-quality.ts";
 export * from "./rust-relations.ts";
+export * from "./semantic-blueprint.ts";

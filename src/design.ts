@@ -14,6 +14,11 @@ import type {
 } from "./types.ts";
 import { MAX_LEARNING_REPOSITORIES } from "./reference.ts";
 import { supportsExplicitIntent } from "./bundle.ts";
+import {
+  OBSERVED_CLAIM_CONFIDENCE_CEILING,
+  blueprintObservations,
+  buildReferenceSemanticBlueprints,
+} from "./semantic-blueprint.ts";
 
 const ID = /^[a-z][a-z0-9_-]{2,63}$/;
 const TEST_LAYERS = new Set(["unit", "integration", "contract", "property", "end-to-end"]);
@@ -106,6 +111,7 @@ function parseClaim(item: Record<string, unknown>, label: string): DesignClaim {
     evidenceBundleIds: stringArray(item.evidenceBundleIds, `${label}.evidenceBundleIds`),
     evidenceSliceIds: stringArray(item.evidenceSliceIds, `${label}.evidenceSliceIds`),
     counterEvidenceSliceIds: stringArray(item.counterEvidenceSliceIds, `${label}.counterEvidenceSliceIds`),
+    blueprintObservationIds: stringArray(item.blueprintObservationIds, `${label}.blueprintObservationIds`),
     limitations: stringArray(item.limitations, `${label}.limitations`),
   };
 }
@@ -144,6 +150,11 @@ export function fingerprintDesignDossier(dossier: DesignDossier): string {
 }
 
 export function buildDesignDossierRequest(referenceGate: GateResult, taskFingerprint: string): DesignDossierRequest {
+  const semanticBlueprints = buildReferenceSemanticBlueprints(
+    referenceGate.approvedPack.atlases,
+    referenceGate.approvedPack.slices,
+    referenceGate.approvedPack.bundles,
+  );
   return {
     schemaVersion: 1,
     taskFingerprint,
@@ -156,6 +167,7 @@ export function buildDesignDossierRequest(referenceGate: GateResult, taskFingerp
     })),
     atlases: referenceGate.approvedPack.atlases,
     bundles: referenceGate.approvedPack.bundles,
+    semanticBlueprints,
     evidenceIndex: referenceGate.approvedPack.slices.map((slice) => ({
       id: slice.id,
       repository: slice.repository,
@@ -164,10 +176,18 @@ export function buildDesignDossierRequest(referenceGate: GateResult, taskFingerp
       reason: slice.reason,
       sourceUrl: slice.sourceUrl,
       license: slice.license,
+      strategy: slice.strategy,
+      symbols: slice.symbols,
+      evidenceRoles: slice.evidenceRoles,
+      sourceRoute: slice.sourceRoute,
+      evidenceStrength: slice.evidenceStrength,
     })),
     requirements: [
       "Record local constraints, existing conventions, and required quality attributes before transferring any reference idea.",
       "Express architecture, specifications, failure semantics, and test concepts independently of the upstream language and layout.",
+      "Use the Reference Semantic Blueprint as a bounded navigation index for modules, contracts, data models, relationships, failures, tests, extension points, and parser negative space.",
+      "Every non-unknown claim must cite blueprint observation IDs and their underlying approved slices; the blueprint cannot replace source evidence.",
+      "Respect evidence-strength confidence ceilings: textual 0.65, syntactic 0.8, resolved 0.9, corroborated 0.95 for observed claims; parser support itself is never a design-quality signal.",
       "Use the Design Atlas to understand module relationships and evidence coverage, but cite approved slices for every reference-derived claim.",
       "Classify every reference-derived claim as explicit, observed, inferred, or unknown; inferred claims require limitations and confidence no greater than 0.8.",
       "Use unknown claims to record uncertainty, never as the sole basis for an implementation concept.",
@@ -228,6 +248,13 @@ export function evaluateDesignDossier(
   for (const repository of approvedRepositories) if (!dossierRepositories.has(repository)) reasons.push(`Dossier omits a confirmed reference repository: ${repository}`);
   const evidence = new Map(referenceGate.approvedPack.slices.map((slice) => [slice.id, slice]));
   const approvedBundles = new Map(referenceGate.approvedPack.bundles.map((bundle) => [bundle.id, bundle]));
+  const blueprints = buildReferenceSemanticBlueprints(
+    referenceGate.approvedPack.atlases,
+    referenceGate.approvedPack.slices,
+    referenceGate.approvedPack.bundles,
+  );
+  const blueprintById = new Map(blueprints.flatMap((blueprint) => blueprintObservations([blueprint])
+    .map((observation) => [observation.id, { observation, repository: blueprint.repository }] as const)));
   const conceptGroups = [dossier.principles, dossier.architecture, dossier.specifications, dossier.testConcepts];
   const concepts = conceptGroups.flat() as Array<{ id: string; evidenceSliceIds: string[] }>;
   const allIds = new Set<string>();
@@ -276,6 +303,20 @@ export function evaluateDesignDossier(
       if (!allowedSliceIds.has(id)) reasons.push(`${label} cites evidence outside its bundles: ${id}`);
       if (evidence.has(id) && allowedSliceIds.has(id)) epistemicEvidence.add(id);
     }
+    if (claim.status !== "unknown" && !claim.blueprintObservationIds.length) {
+      reasons.push(`${label} cites no semantic blueprint observation`);
+    }
+    let strongestObservation: keyof typeof OBSERVED_CLAIM_CONFIDENCE_CEILING = "missing";
+    for (const id of new Set(claim.blueprintObservationIds)) {
+      const entry = blueprintById.get(id);
+      if (!entry) { reasons.push(`${label} cites unknown or unapproved blueprint observation: ${id}`); continue; }
+      if (!dossierRepositories.has(entry.repository)) reasons.push(`${label} cites a blueprint from an unnamed repository: ${entry.repository}`);
+      const alignedSlices = entry.observation.evidenceSliceIds.filter((sliceId) => allowedSliceIds.has(sliceId) && claim.evidenceSliceIds.includes(sliceId));
+      if (!alignedSlices.length) reasons.push(`${label} blueprint observation is not backed by the claim's cited bundle slices: ${id}`);
+      if (OBSERVED_CLAIM_CONFIDENCE_CEILING[entry.observation.evidenceStrength] > OBSERVED_CLAIM_CONFIDENCE_CEILING[strongestObservation]) {
+        strongestObservation = entry.observation.evidenceStrength;
+      }
+    }
     if (claim.status === "explicit") {
       if (!hasExplicitBundle) reasons.push(`${label} claims explicit intent without an explicit-capable bundle`);
       if (!claim.evidenceSliceIds.length) reasons.push(`${label} explicit claim has no supporting evidence`);
@@ -285,6 +326,9 @@ export function evaluateDesignDossier(
       })) reasons.push(`${label} explicit claim does not directly cite an ADR, RFC, architecture, or design document`);
     }
     if (claim.status === "observed" && !claim.evidenceSliceIds.length) reasons.push(`${label} observed claim has no supporting evidence`);
+    if (claim.status === "observed" && claim.confidence > OBSERVED_CLAIM_CONFIDENCE_CEILING[strongestObservation]) {
+      reasons.push(`${label} observed confidence ${claim.confidence} exceeds the ${strongestObservation} blueprint ceiling ${OBSERVED_CLAIM_CONFIDENCE_CEILING[strongestObservation]}`);
+    }
     if (claim.status === "inferred") {
       if (!claim.evidenceSliceIds.length) reasons.push(`${label} inferred claim has no supporting evidence`);
       if (!claim.limitations.length) reasons.push(`${label} inferred claim has no limitations`);

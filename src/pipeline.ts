@@ -17,6 +17,7 @@ import { normalizeTaskSpec } from "./task.ts";
 import type { SourceAnalyzer } from "./source-analysis.ts";
 import type { SourceRouter, SourceRouteResolver } from "./source-routing.ts";
 import { annotateEvidenceStrength, buildAnalysisQualityReport } from "./analysis-quality.ts";
+import { renderReferenceSemanticBlueprints } from "./semantic-blueprint.ts";
 
 async function mapLimited<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
@@ -221,6 +222,8 @@ export async function writeDesignRequest(referenceGate: GateResult, taskFingerpr
   await Promise.all([
     writeFile(resolve(directory, "DESIGN_DOSSIER_REQUEST.json"), `${JSON.stringify(request, null, 2)}\n`, "utf8"),
     writeFile(resolve(directory, "DESIGN_DOSSIER_TEMPLATE.json"), `${JSON.stringify(template, null, 2)}\n`, "utf8"),
+    writeFile(resolve(directory, "SEMANTIC_BLUEPRINTS.json"), `${JSON.stringify(request.semanticBlueprints, null, 2)}\n`, "utf8"),
+    writeFile(resolve(directory, "SEMANTIC_BLUEPRINTS.md"), renderReferenceSemanticBlueprints(request.semanticBlueprints), "utf8"),
   ]);
   return directory;
 }

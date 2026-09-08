@@ -2,7 +2,7 @@ import { access, mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { applyReviewConfirmation, buildReviewConfirmation } from "../../src/confirmation.ts";
 import { loadConfig } from "../../src/config.ts";
-import { buildDesignConfirmation, confirmDesignDossier, evaluateDesignDossier, fingerprintDesignDossier, parseDesignDossier } from "../../src/design.ts";
+import { buildDesignConfirmation, buildDesignDossierRequest, confirmDesignDossier, evaluateDesignDossier, fingerprintDesignDossier, parseDesignDossier } from "../../src/design.ts";
 import { renderDesignAgentContext } from "../../src/design-render.ts";
 import { GitHubClient } from "../../src/github.ts";
 import { prepareReferencePack, writeDesignProposal, writeDesignRequest, writeDesignResult, writeGateResult, writeReferencePack } from "../../src/pipeline.ts";
@@ -468,6 +468,23 @@ export class PiHarnessController {
     return evidence;
   }
 
+  getSemanticBlueprints(repositories: string[] = []): ReturnType<typeof buildDesignDossierRequest>["semanticBlueprints"] {
+    if (!this.#run || !this.#gate) throw new Error("Semantic blueprints are available only after independent reference confirmation");
+    if (this.#phase !== "distilling" && this.#phase !== "awaiting_design_confirmation") {
+      throw new Error(`Semantic blueprints are not available while phase is ${this.#phase}`);
+    }
+    const available = buildDesignDossierRequest(this.#gate, this.#run.taskIdentity.fingerprint).semanticBlueprints;
+    const requested = [...new Set(repositories)];
+    if (!requested.length) return available;
+    if (requested.length > 2) throw new Error("At most 2 confirmed repository blueprints may be read at once");
+    const byRepository = new Map(available.map((blueprint) => [blueprint.repository, blueprint]));
+    return requested.map((repository) => {
+      const blueprint = byRepository.get(repository);
+      if (!blueprint) throw new Error(`Semantic blueprint repository is unknown or not approved: ${repository}`);
+      return blueprint;
+    });
+  }
+
   async getEvidenceBundles(ids: string[]): Promise<Array<{
     bundle: ReferencePack["bundles"][number];
     slices: Array<Pick<ReferencePack["slices"][number], "id" | "repository" | "path" | "startLine" | "endLine" | "sourceUrl" | "license" | "reason" | "strategy" | "evidenceRoles" | "symbols" | "sourceRoute" | "evidenceStrength">>;
@@ -621,7 +638,7 @@ export class PiHarnessController {
     if (this.#run && !this.#run.pack.task.domain) return `${base}\n\nThis exploratory pack has no task-grounded domain profile and cannot pass review. Call imitator_prepare again with the same local task plus domain.purpose and domain.capabilities before reviewing references. Do not change the product purpose to fit a candidate.`;
     if (this.#phase === "reviewing") return `${base}\n\nUse imitator_get_evidence_bundle first, then individual evidence only as needed. Submit bundle- and slice-bound adopt/adapt/reject proposals with imitator_submit_review. This stage selects trustworthy references; it does not yet authorize coding.`;
     if (this.#phase === "awaiting_confirmation") return `${base}\n\nA reference proposal passed, but only a human command or separate judge identity may confirm it. Do not attempt to confirm your own proposal.`;
-    if (this.#phase === "distilling") return `${base}\n\nThe reference set is confirmed. Read only approved bundles/evidence and call imitator_submit_design_dossier. Classify every design claim as explicit, observed, inferred, or unknown; inferred claims require bounded confidence and limitations. Unknown claims cannot justify implementation alone. Do not code yet.`;
+    if (this.#phase === "distilling") return `${base}\n\nThe reference set is confirmed. Call imitator_get_semantic_blueprint for one repository and at most two relevant sections at a time, then read only the approved bundles/evidence needed to verify selected observations and call imitator_submit_design_dossier. Every non-unknown claim must bind blueprint observations to their underlying slices. Classify claims as explicit, observed, inferred, or unknown and respect evidence-strength confidence ceilings. Unknown claims cannot justify implementation alone. Do not code yet.`;
     if (this.#phase === "awaiting_design_confirmation") return `${base}\n\nThe Design Dossier passed deterministic validation but requires confirmation by a different human or judge identity. Do not code or confirm your own dossier.`;
     if (this.#phase === "blocked") return `${base}\n\nNo precedent is currently approved. Obtain stronger domain evidence or refine queries/aliases faithfully and run imitator_prepare again. Preserve the user's product purpose; do not change it to fit candidates or raise confidence merely to pass a threshold.`;
     return `${base}\n\n${renderDesignAgentContext(this.#finalDesignGate!)}`;

@@ -1,5 +1,5 @@
 /** Syntax observations only: never proof of runtime behavior or design intent. */
-export type SourceLanguage = "python" | "rust" | (string & {});
+export type SourceLanguage = "python" | "rust" | "typescript" | (string & {});
 export type SourceSymbolKind = "class" | "function" | "async-function" | "module" | "struct" | "union" | "enum" | "trait" | "impl" | "type" | "const" | "static" | "macro" | (string & {});
 
 export type SourceSymbol = {

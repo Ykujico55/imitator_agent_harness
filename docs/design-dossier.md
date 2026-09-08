@@ -11,7 +11,7 @@ Design Dossier 是 reference selection 与实际编码之间的压缩层。它�
 一份 schema v1 dossier 绑定 `taskFingerprint`、`referencePackFingerprint`、作者和全部已确认仓库，并且仓库数必须为 1–2 个。它包含：
 
 - `localContext`：本地硬约束、既有惯例和质量属性，防止上游设计覆盖本地事实；
-- `claims`：把每条参考派生判断标为 `explicit`、`observed`、`inferred` 或 `unknown`，绑定 Evidence Bundle、支持/反证切片、置信度和限制；
+- `claims`：把每条参考派生判断标为 `explicit`、`observed`、`inferred` 或 `unknown`，绑定 Semantic Blueprint observation、Evidence Bundle、支持/反证切片、置信度和限制；
 - `principles`：问题、约束、决定、机制、权衡、非目标、适用与失效条件；
 - `architecture`：职责、协作者、不变量、失败模式和扩展点；
 - `specifications`：前置条件、后置条件、不变量和错误语义；
@@ -67,7 +67,7 @@ Design gate 默认拒绝以下情况：
 
 ## 当前能力边界
 
-- TS/JS 有 compiler AST 切片；其他语言仍是确定性行窗口，因此跨语言“设计抽取”由 dossier 协议和 judge 完成，而不是所有语言的静态语义分析。
+- TS/JS、Python 与 Rust 已有有界静态语义分析和完整声明切片；其他语言仍使用确定性结构/行窗口。增强解析提高参考证据与架构观察精度，但跨语言设计判断仍由 dossier 协议和独立 judge 完成。
 - gate 能发现无证据、漏映射、上下文爆炸和结构性 cargo cult，不能自动证明架构优雅或测试充分。
 - Pi 门禁只拦截已知修改工具名；按当前产品范围，未知第三方修改工具尚未默认拒绝。需要不可绕过边界时应叠加 OS sandbox。
 - 系统没有真实模型质量结论。必须运行足量 paired eval，并对隐藏测试、回归、安全缺陷、token/费用和无意义上游相似度做盲评。

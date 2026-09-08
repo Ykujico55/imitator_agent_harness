@@ -2,6 +2,7 @@ import type { SourceLanguageAdapter, SourceRouteDecision, SourceRouter } from ".
 import { createPythonAnalysis } from "./python-ast.ts";
 import { createRustAnalysis } from "./rust-syntax.ts";
 import { selectTypeScriptAstWindow } from "./typescript-ast.ts";
+import { analyzeTypeScriptSource } from "./typescript-analysis.ts";
 
 const PYTHON_SOURCE = /\.py$/i;
 const PYTHON_MANIFEST = /(^|\/)(pyproject\.toml|setup\.cfg)$/i;
@@ -82,6 +83,7 @@ export function createDefaultSourceRouter(options: {
   python?: ReturnType<typeof createPythonAnalysis>;
   rust?: ReturnType<typeof createRustAnalysis>;
   typescriptSelector?: typeof selectTypeScriptAstWindow;
+  typescriptAnalyzer?: typeof analyzeTypeScriptSource;
   additionalAdapters?: readonly SourceLanguageAdapter[];
 } = {}): SourceRouter {
   const python = options.python ?? createPythonAnalysis();
@@ -103,7 +105,9 @@ export function createDefaultSourceRouter(options: {
     },
     {
       id: "typescript-compiler-ast",
+      analysisLanguage: "typescript",
       match: (path) => TYPESCRIPT_SOURCE.test(path) ? "extension:typescript-javascript-family" : undefined,
+      analyze: options.typescriptAnalyzer ?? analyzeTypeScriptSource,
       selectWindow: options.typescriptSelector ?? selectTypeScriptAstWindow,
     },
     ...(options.additionalAdapters ?? []),

@@ -10,6 +10,7 @@ export type PiControllerPhase =
 
 export const IMITATOR_TOOL_NAMES = {
   prepare: "imitator_prepare",
+  getSemanticBlueprint: "imitator_get_semantic_blueprint",
   getEvidenceBundle: "imitator_get_evidence_bundle",
   getEvidence: "imitator_get_evidence",
   submitReview: "imitator_submit_review",

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { selectTypeScriptAstWindow } from "../integrations/typescript-ast.ts";
 import { defaultConfig } from "../src/config.ts";
-import { rankPaths, collectSlices, type SliceReadFailure } from "../src/slice.ts";
+import { rankPaths, collectSlices, selectSupplementalSemanticWindows, type SliceReadFailure, type SliceWindow } from "../src/slice.ts";
 import { assessRepository } from "../src/score.ts";
 import type { GitHubClient } from "../src/github.ts";
 import { matureRepository } from "./helpers.ts";
@@ -138,4 +138,34 @@ test("TypeScript AST slicing returns a complete task-relevant declaration", () =
 
 test("TypeScript AST slicing declines unsupported languages for deterministic fallback", () => {
   assert.equal(selectTypeScriptAstWindow({ path: "main.py", content: "def run():\n  pass", terms: ["run"], maxLines: 20 }), undefined);
+});
+
+test("deep analysis preserves distinct contract, failure, extension, data, and test roles per file", () => {
+  const content = [
+    "class CachePolicy(Protocol):",
+    "  entries: dict",
+    "  pass",
+    "",
+    "def risky_lookup():",
+    "  raise KeyError()",
+    "",
+    "",
+    "def test_expiry(clock):",
+    "  assert clock.now() == 0",
+    "  assert True",
+  ].join("\n");
+  const primary: SliceWindow = { start: 5, end: 7, content: "def risky_lookup():\n  raise KeyError()\n", relevance: 20, strategy: "python-ast", symbols: ["risky_lookup"] };
+  const supplemental = selectSupplementalSemanticWindows({
+    language: "python", status: "parsed", parser: "python-stdlib-ast", limitations: [], imports: [],
+    symbols: [
+      { name: "CachePolicy", kind: "class", startLine: 1, endLine: 3, signature: "class CachePolicy(Protocol)", decorators: [], bases: ["Protocol"], raises: [], catches: [], assertionCount: 0, role: "implementation", hasBody: true, fields: [{ name: "entries", annotation: "dict", defaultValue: "", line: 2, kind: "class" }] },
+      { name: "risky_lookup", kind: "function", startLine: 5, endLine: 7, signature: "def risky_lookup()", decorators: [], bases: [], raises: ["KeyError"], catches: [], assertionCount: 0, role: "implementation", hasBody: true },
+      { name: "test_expiry", kind: "function", startLine: 9, endLine: 11, signature: "def test_expiry(clock)", decorators: [], bases: [], raises: [], catches: [], assertionCount: 2, role: "test", hasBody: true, fixtureRequests: ["clock"] },
+    ],
+  }, content, primary, 20);
+  assert.deepEqual(supplemental.map((window) => window.symbols), [["CachePolicy"], ["test_expiry"]]);
+  assert.ok(supplemental.every((window) => window.strategy === "python-ast"));
+  assert.match(supplemental[0]!.content, /^class CachePolicy/);
+  assert.match(supplemental[1]!.content, /^def test_expiry/);
+  assert.equal(selectSupplementalSemanticWindows(undefined, content, primary, 20).length, 0);
 });

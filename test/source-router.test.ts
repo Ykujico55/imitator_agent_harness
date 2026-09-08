@@ -19,6 +19,7 @@ test("default source router selects one enhanced parser per file in a polyglot t
   assert.equal(router.resolve({ path: "crates/core/src/lib.rs" }).selectedAnalyzer, "rust-static-syntax");
   assert.equal(router.resolve({ path: "crates/core/Cargo.toml" }).routeReason, "rust-manifest");
   assert.equal(router.resolve({ path: "packages/ui/src/view.tsx" }).selectedAnalyzer, "typescript-compiler-ast");
+  assert.deepEqual(router.resolve({ path: "packages/ui/src/view.tsx" }).capabilities, ["syntax-analysis", "semantic-slicing"]);
   assert.equal(router.resolve({ path: "tools\\worker.mjs" }).selectedAnalyzer, "typescript-compiler-ast");
   assert.equal(router.resolve({ path: "service/main.go" }).selectedAnalyzer, "structural-fallback");
   assert.equal(router.resolve({ path: "README.md" }).selectionStatus, "structural-fallback");
@@ -101,7 +102,8 @@ test("Atlas, slices and rendered context preserve route and fallback outcomes", 
   const atlas = await buildRepositoryDesignAtlas(client, repository, task, defaultConfig, new Map(), router.analyze, router.resolve);
   const tsRoute = atlas.sourceRoutes?.find((item) => item.path === "src/extensions/tool-registry.ts");
   assert.equal(tsRoute?.selectedAnalyzer, "typescript-compiler-ast");
-  assert.equal(tsRoute?.analysisStatus, "not-applicable");
+  assert.equal(tsRoute?.analysisStatus, "parsed");
+  assert.equal(atlas.sourceAnalyses?.find((item) => item.path === "src/extensions/tool-registry.ts")?.language, "typescript");
   assert.equal(atlas.sourceRoutes?.find((item) => item.path === "README.md")?.selectionStatus, "structural-fallback");
   assert.match(renderDesignAtlases([atlas]), /Source route src\/extensions\/tool-registry\.ts: typescript-compiler-ast/);
 

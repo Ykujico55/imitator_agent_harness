@@ -40,7 +40,7 @@ npx pi -e ./integrations/pi/index.ts
 6. 必要时再用 `imitator_get_evidence` 按 ID 读取最多 6 个切片；源码内容带明确的 `UNTRUSTED EVIDENCE` 边界。评审只能引用已经检查过的包以及属于这些包、且实际读取过的切片。
 7. Agent 用 `imitator_submit_review` 提交每个仓库的 adopt/adapt/reject、置信度、风险、范式、错配、风险说明、包 ID 和引用切片；通过后进入 `awaiting_confirmation`，仍不解锁。
 8. 人第一次执行 `/imitator-confirm`，核对任务指纹和 provisional 仓库；自动化 eval 则由第一个隔离 judge 确认。成功后只进入 `distilling`，编码仍锁定。
-9. Agent 可继续按需读取已批准证据，然后用 `imitator_submit_design_dossier` 提交认识论分级 claims、本地约束、质量属性、跨语言原则、架构职责/失败模式、规格、测试 oracle、适用边界、negative space 和逐项本地映射。
+9. Agent 先用 `imitator_get_semantic_blueprint` 按一个仓库、每次最多两个 section 读取已确认参考的有界模块、契约、关系、失败、测试、扩展点和负空间索引，再按 observation 中的 Bundle/Slice ID 验证必要证据。随后用 `imitator_submit_design_dossier` 提交认识论分级 claims、本地约束、质量属性、跨语言原则、架构职责/失败模式、规格、测试 oracle、适用边界、negative space 和逐项本地映射。每个非 unknown claim 必须同时绑定 Blueprint observation 与底层证据。
 10. 确定性 design gate 通过后进入 `awaiting_design_confirmation`，提案写入 `design-proposal/DESIGN_DOSSIER.md`。人检查该文件并第二次执行 `/imitator-confirm`；自动 eval 使用第二个隔离 judge。
 11. 只有两层 gate 均确认后才进入 `approved`。系统提示只携带本地化抽象设计契约，不含远程源码或证据 ID；原始证据工具也随即关闭。
 12. 新任务执行 `/imitator-reset`，重新锁定修改工具并清空持久状态。若直接启动新的 prepare，旧状态也会在远程工作前先被清除。
@@ -48,7 +48,7 @@ npx pi -e ./integrations/pi/index.ts
 辅助命令：
 
 - `/imitator-status`：显示当前 phase、任务、候选、证据包、切片、认识论 claim 和批准数量；
-- `/imitator-doctor`：检查五个扩展工具、五个控制命令、三个生命周期 hook 和状态文件 checksum，输出 `registry/hooks/store` 三项具名结果；
+- `/imitator-doctor`：检查六个扩展工具、五个控制命令、三个生命周期 hook 和状态文件 checksum，输出 `registry/hooks/store` 三项具名结果；
 - `/imitator-prepare <任务>`：由人显式开始 prepare；
 - `/imitator-confirm`：按当前 phase 确认参考选择或 Design Dossier；
 - `/imitator-reset`：开始新任务或放弃当前参考包。
@@ -59,7 +59,7 @@ npx pi -e ./integrations/pi/index.ts
 
 - 根目录：原始 `manifest.json`、引用文档和 fail-closed review template；
 - `review-proposal/`：第一次确认前的结构化 submission、gate report 和 provisional 引用集合；
-- `reference-approved/`：第一次确认后的引用集合、确认记录、Design Dossier request/template；
+- `reference-approved/`：第一次确认后的引用集合、确认记录、Semantic Blueprint JSON/Markdown、Design Dossier request/template；
 - `design-proposal/`：确认前可读的 dossier、adaptation brief 和 deterministic gate 结果；
 - `approved/`：两份确认、最终 dossier、许可证/来源保留的引用、local adaptation brief，以及不含远程源码的 `APPROVED_AGENT_CONTEXT.md`。
 
@@ -95,7 +95,7 @@ npm run check
 - 持久状态重启恢复、任务/HEAD 绑定和修改后 checksum 拒绝；
 - proposal reviewer 与 human/independent-agent confirmer 身份分离；
 - Dossier 的包内证据归属、认识论上限、推断限制、全概念本地映射、适用边界、本地约束、上下文预算和第二确认身份分离；
-- TypeScript compiler AST 完整声明切片和非支持语言回退；
+- TypeScript compiler AST 静态声明/字段/失败/测试观察、多角色完整声明切片和非支持语言回退；
 - 递归 AST 核心边界测试（包括副作用导入、re-export、动态 import、require 和嵌套目录）、严格 TypeScript 检查和 CLI 启动。
 
 只验证 Pi 适配层：

@@ -42,7 +42,7 @@ Atlas coverage 回答“源码、测试、文档等必要模态是否真实读�
 - Pi prepare、渐进 evidence API、REFERENCE、DESIGN_ATLAS、EVIDENCE_BUNDLES 和 review request 都携带这些字段。
 - Judge 被明确要求把 textual-only、unresolved 和 parser-limited 当作负空间，不能因为语言有适配器而提高置信度。
 
-当前分数尚未经过真实项目校准。下一步应使用人工标注仓库测量完整声明、静态关系和 test-target 的 precision/recall，再决定是否将质量分用于同领域候选的次级排序或置信度上限。
+当前总分尚未经过真实项目校准，因此仍不参与候选排序或门禁。Design Dossier 只使用单条 Blueprint observation 的离散证据强度限制 observed claim 置信度（textual 0.65、syntactic 0.8、resolved 0.9、corroborated 0.95），不会把 repository-level `analysisQuality.score` 当作设计质量。下一步应使用人工标注参考仓库测量完整声明、静态关系和 test-target 的 precision/recall，再校准这些上限。
 
 ## 验证
 

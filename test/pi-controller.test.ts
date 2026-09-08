@@ -25,6 +25,7 @@ import {
 } from "../integrations/pi/contract.ts";
 import { FilePiStateStore, inspectWorkspace, type PersistedPiPayload, type PiStateStore } from "../integrations/pi/state.ts";
 import { codingAgentTask, matureAtlas, matureBundle, matureRepository } from "./helpers.ts";
+import { blueprintObservations, buildReferenceSemanticBlueprints } from "../src/semantic-blueprint.ts";
 
 function preparedRun(): PreparedRun {
   const repository = matureRepository();
@@ -42,6 +43,9 @@ function preparedRun(): PreparedRun {
     relevance: 50,
     reason: "extension boundary",
     content: "export interface HookRegistry {}",
+    strategy: "typescript-ast",
+    symbols: ["HookRegistry"],
+    evidenceStrength: { level: "syntactic", signals: ["complete-semantic-unit"], limitations: [] },
   });
   const pack: ReferencePack = {
     schemaVersion: 4,
@@ -102,6 +106,8 @@ function approvedDecision(): RepositoryReviewDecision {
 }
 
 function approvedDesign(run: PreparedRun): DesignDossier {
+  const blueprintObservationId = blueprintObservations(buildReferenceSemanticBlueprints(run.pack.atlases, run.pack.slices, run.pack.bundles))
+    .find((observation) => observation.section === "contracts" && observation.evidenceSliceIds.includes("approved-slice"))!.id;
   return {
     schemaVersion: 1,
     taskFingerprint: run.taskIdentity.fingerprint,
@@ -116,8 +122,8 @@ function approvedDesign(run: PreparedRun): DesignDossier {
     },
     claims: [{
       id: "claim_registry_boundary", statement: "The reference separates hook registration from provider-specific execution.",
-      status: "observed", confidence: 0.9, evidenceBundleIds: ["bundle-architecture"],
-      evidenceSliceIds: ["approved-slice"], counterEvidenceSliceIds: [], limitations: [],
+      status: "observed", confidence: 0.8, evidenceBundleIds: ["bundle-architecture"],
+      evidenceSliceIds: ["approved-slice"], counterEvidenceSliceIds: [], blueprintObservationIds: [blueprintObservationId], limitations: [],
     }],
     principles: [{
       id: "principle_registry", title: "Separate registration from execution",
@@ -213,6 +219,9 @@ test("Pi controller enforces prepare-review-approve before mutation", async () =
   assert.match(controller.mutationBlockReason("write")!, /confirmation/);
   await controller.confirmReview("human-test", "human");
   assert.equal(controller.status().phase, "distilling");
+  const blueprints = controller.getSemanticBlueprints();
+  assert.equal(blueprints.length, 1);
+  assert.ok(blueprintObservations(blueprints).some((observation) => observation.evidenceSliceIds.includes("approved-slice")));
   assert.match(controller.mutationBlockReason("write")!, /design dossier/i);
   await assert.rejects(() => controller.getEvidence(["uncited-slice"]), /not approved/);
   const design = await controller.submitDesignDossier(approvedDesign(run));
