@@ -1,18 +1,19 @@
 import { createHash } from "node:crypto";
-import type { EvidenceSlice, HarnessConfig, RepositoryAssessment, RepositoryDesignAtlas, TaskSpec, TreeEntry } from "./types.ts";
+import type { EvidenceSlice, HarnessConfig, RepositoryAssessment, RepositoryDesignAtlas, SliceStrategy, TaskSpec, TreeEntry } from "./types.ts";
 import type { GitHubClient } from "./github.ts";
 import { taskTerms } from "./query.ts";
 import { learningRepositoryLimit } from "./reference.ts";
 import { repositoryContentKey } from "./atlas.ts";
-import { isCodeFile, isImplementationPath, isTestPath, isTestSupportPath, isPythonPackageMarker } from "./evidence-path.ts";
+import { isCodeFile, isImplementationPath, isTestPath, isTestSupportPath, isPythonPackageMarker, isRustBuildSupportPath } from "./evidence-path.ts";
 import { hasSourceEvidence, hasTestEvidence } from "./coverage-evidence.ts";
+import type { SourceRouteDecision, SourceRouteResolver } from "./source-routing.ts";
 
 export type SliceWindow = {
   start: number;
   end: number;
   content: string;
   relevance: number;
-  strategy: "line-window" | "typescript-ast" | "python-ast";
+  strategy: SliceStrategy;
   symbols?: string[];
 };
 
@@ -37,7 +38,7 @@ const MANIFEST_PATH = /(^|\/)(package\.json|pyproject\.toml|setup\.cfg|Cargo\.to
 
 export function rankPaths(tree: TreeEntry[], terms: string[], preferredPaths = new Set<string>()): Array<{ entry: TreeEntry; score: number; reason: string }> {
   return tree
-    .filter((entry) => entry.type === "blob" && (TEXT_FILE.test(entry.path) || isCodeFile(entry.path)) && !EXCLUDED.test(entry.path) && (entry.size ?? 0) < 120_000)
+    .filter((entry) => entry.type === "blob" && (TEXT_FILE.test(entry.path) || isCodeFile(entry.path)) && !EXCLUDED.test(entry.path) && !isRustBuildSupportPath(entry.path) && (entry.size ?? 0) < 120_000)
     .map((entry) => {
       const path = entry.path.toLowerCase();
       const matches = terms.filter((term) => path.includes(term.toLowerCase()));
@@ -50,7 +51,7 @@ export function rankPaths(tree: TreeEntry[], terms: string[], preferredPaths = n
       if (/(^|\/)(examples?|samples?)(\/|$)/i.test(path)) { score += 18; reasons.push("usage example"); }
       if (isTestPath(path)) { score += 12; reasons.push("behavioral evidence"); }
       if (isTestSupportPath(path)) { score += 6; reasons.push("test-support evidence, not a test case"); }
-      if (isCodeFile(path) && !isTestPath(path) && !isTestSupportPath(path)) { score += 8; reasons.push("implementation source"); }
+      if (isImplementationPath(path)) { score += 8; reasons.push("implementation source"); }
       score -= path.split("/").length * 0.5;
       return { entry, score, reason: reasons.join("; ") || "representative source" };
     })
@@ -145,6 +146,7 @@ export async function collectSlices(
   atlases: RepositoryDesignAtlas[] = [],
   contentCache = new Map<string, string>(),
   failures: SliceReadFailure[] = [],
+  sourceRouteResolver?: SourceRouteResolver,
 ): Promise<EvidenceSlice[]> {
   const terms = taskTerms(task);
   const slices: EvidenceSlice[] = [];
@@ -158,10 +160,10 @@ export async function collectSlices(
       ...(atlas?.architectureDocuments.map((item) => item.path) ?? []),
       ...(atlas?.coverage.signals.filter((signal) => signal.name === "source-evidence" || signal.name === "test-evidence").flatMap((signal) => signal.sources.map((item) => item.path)) ?? []),
     ]);
-    const inspectedPython = new Map(atlas?.sourceAnalyses?.map((item) => [item.path, item]) ?? []);
+    const inspectedAnalyses = new Map(atlas?.sourceAnalyses?.map((item) => [item.path, item]) ?? []);
     const candidates = rankPaths(repo.tree, terms, preferredPaths).filter((candidate) => {
       if (!isPythonPackageMarker(candidate.entry.path)) return true;
-      const analysis = inspectedPython.get(candidate.entry.path);
+      const analysis = inspectedAnalyses.get(candidate.entry.path);
       return !analysis || hasSourceEvidence(candidate.entry.path, "inspected", analysis);
     }).sort((a, b) => Number(isPythonPackageMarker(a.entry.path)) - Number(isPythonPackageMarker(b.entry.path)) || b.score - a.score || a.entry.path.localeCompare(b.entry.path));
     const ranked = diversifyPaths(candidates, config.slicing.maxFilesPerRepository);
@@ -172,6 +174,19 @@ export async function collectSlices(
         const text = contentCache.get(cacheKey) ?? await client.readTextFile(repo.fullName, candidate.entry.path, repo.resolvedRevision);
         contentCache.set(cacheKey, text);
         if (text.includes("\0")) continue;
+        let sourceRouteDecision: SourceRouteDecision | undefined;
+        if (sourceRouteResolver) {
+          try { sourceRouteDecision = sourceRouteResolver({ path: candidate.entry.path }); }
+          catch {
+            sourceRouteDecision = {
+              selectedAnalyzer: "structural-fallback",
+              routeReason: "source-route-resolver-failed",
+              selectionStatus: "structural-fallback",
+              capabilities: [],
+              fallback: "line-window",
+            };
+          }
+        }
         let semanticWindow: SliceWindow | undefined;
         try {
           semanticWindow = semanticSelector?.({
@@ -183,24 +198,36 @@ export async function collectSlices(
         } catch {
           // Parser errors must degrade to the deterministic dependency-free window.
         }
-        const window = semanticWindow ?? selectLineWindow(text, terms, config.slicing.maxLinesPerSlice);
-        const remaining = config.slicing.maxTotalCharacters - characters;
-        if (remaining < 200) return slices;
-        if (window.strategy !== "line-window" && window.content.length > remaining) continue;
-        const content = window.content.slice(0, remaining);
-        if (/\.py$/i.test(candidate.entry.path) && isTestPath(candidate.entry.path)) {
-          const analysis = inspectedPython.get(candidate.entry.path);
-          // Only declarations actually contained in this window can satisfy the
-          // test floor. Custom assertion helpers are valid AST test bodies too.
-          const windowAnalysis = analysis ? { ...analysis, symbols: analysis.symbols.filter((symbol) => symbol.startLine >= window.start && symbol.endLine <= window.end) } : undefined;
-          if (window.strategy !== "python-ast" && !hasTestEvidence(candidate.entry.path, content, windowAnalysis)) continue;
+        const primary = semanticWindow ?? selectLineWindow(text, terms, config.slicing.maxLinesPerSlice);
+        const analysis = inspectedAnalyses.get(candidate.entry.path);
+        const windows: SliceWindow[] = [primary];
+        if (/\.rs$/i.test(candidate.entry.path) && analysis?.language === "rust" && analysis.status === "parsed") {
+          const covered = new Set(analysis.symbols.filter((symbol) => symbol.startLine >= primary.start && symbol.endLine <= primary.end).map((symbol) => symbol.role === "test" ? "test" : symbol.kind === "module" ? "other" : "implementation"));
+          for (const role of ["implementation", "test"] as const) {
+            if (covered.has(role)) continue;
+            const symbol = analysis.symbols.find((item) => (role === "test" ? item.role === "test" : item.role === "implementation" && item.kind !== "module") && item.hasBody !== false && item.endLine - item.startLine + 1 <= config.slicing.maxLinesPerSlice);
+            if (symbol) windows.push({ start: symbol.startLine, end: symbol.endLine, content: text.replace(/\r\n/g, "\n").split("\n").slice(symbol.startLine - 1, symbol.endLine).join("\n"), relevance: 0, strategy: "rust-syntax", symbols: [symbol.name] });
+          }
         }
-        characters += content.length;
+        for (const window of windows) {
+          if (slices.length >= config.slicing.maxSlices) return slices;
+          const remaining = config.slicing.maxTotalCharacters - characters;
+          if (remaining < 200) return slices;
+          if (window.strategy !== "line-window" && window.content.length > remaining) continue;
+          const content = window.content.slice(0, remaining);
+          const windowSymbols = analysis?.symbols.filter((symbol) => symbol.startLine >= window.start && symbol.endLine <= window.end) ?? [];
+          if (/\.py$/i.test(candidate.entry.path) && isTestPath(candidate.entry.path)) {
+            const windowAnalysis = analysis ? { ...analysis, symbols: windowSymbols } : undefined;
+            if (window.strategy !== "python-ast" && !hasTestEvidence(candidate.entry.path, content, windowAnalysis)) continue;
+          }
+          if (/\.rs$/i.test(candidate.entry.path) && analysis?.symbols.some((symbol) => symbol.role === "test") && window.strategy !== "rust-syntax") continue;
+          const evidenceRoles = /\.rs$/i.test(candidate.entry.path) ? [...new Set(windowSymbols.flatMap((symbol) => symbol.role === "test" ? ["test" as const] : symbol.kind !== "module" ? ["implementation" as const] : []))] : undefined;
+          characters += content.length;
         const id = createHash("sha256")
           .update(`${repo.fullName}\0${repo.resolvedRevision}\0${candidate.entry.path}\0${window.start}\0${window.end}`)
           .digest("hex")
           .slice(0, 16);
-        slices.push({
+          slices.push({
           id,
           repository: repo.fullName,
           repositoryUrl: repo.htmlUrl,
@@ -215,7 +242,13 @@ export async function collectSlices(
           content,
           strategy: window.strategy,
           symbols: window.symbols,
-        });
+          evidenceRoles,
+          ...(sourceRouteDecision ? { sourceRoute: {
+            ...sourceRouteDecision,
+            outcome: window.strategy === "line-window" ? "line-window-fallback" as const : "semantic-window" as const,
+          } } : {}),
+          });
+        }
       } catch (error) {
         // A single unreadable, moved, or oversized file must not fail the reference run.
         failures.push({

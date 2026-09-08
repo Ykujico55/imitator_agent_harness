@@ -28,6 +28,7 @@
 - 对初筛通过的仓库生成 commit-pinned Repository Design Atlas：索引 manifest、模块根、入口、设计文档、测试、CI，并在固定读取预算内解析 Node manifest 与 TS/JS 相对 import/test 关系。
 - Atlas 用 overview、design、manifest、source、test、automation、relationships 七个命名信号计算可解释覆盖分；默认要求源码和测试证据且至少 50 分，不足的仓库不会进入切片与评审阶段。
 - Atlas 中存在文件路径还不够：配置要求的 source/test 等类别必须最终形成可读切片；限额或读取错误导致关键模态缺失时整次 prepare 会 fail closed 并报告原因。
+- Atlas coverage 与 `analysisQuality` 已分离：前者确认必要模态读到，后者用 textual→syntactic→resolved→corroborated 五级和七个具名信号描述语义证据强度。质量分仅供观察和 judge 识别负空间，不进入六维技术总分。
 - Atlas 只保存带仓库、revision、许可证、路径和链接的结构事实；它用于发现关系和指导检索，不能替代切片对设计意图的举证。
 - 切片之后会按系统架构、模块边界、技术选型、测试策略和失败语义编译 Evidence Bundle；每个包至少包含配置要求的多种证据类型，并保留 Atlas 关系、来源、许可证和已知限制。
 - Evidence Bundle 有 `explicit` 或 `observed` 认识论上限：只有 ADR/RFC/architecture/design 类明确文档支持的包才允许主张作者的显式意图；其余关系只能作为观察事实或受限推断。
@@ -46,7 +47,7 @@
 - 每个参考派生概念必须引用已批准证据，并由 `explicit`、`observed`、`inferred` 或 `unknown` 主张解释；推断必须记录限制且置信度不高于 0.8，未知不能作为实现概念的唯一依据。
 - Dossier 有 8 万字符及分区数量硬预算；最终 agent context 只含抽象设计契约，不含远程源码或证据 ID。Design 批准后，Pi 也不再向实现 agent 返回原始远程切片。
 - Dossier 先写入 `design-proposal/` 供人工或 judge 审阅；只有不同身份的第二次确认后才进入最终 `approved/` 并解锁。
-- Pi 对 TypeScript/JavaScript 使用 compiler AST 选择完整接口、类型、类、函数或测试单元；其他语言确定性回退到行窗口。
+- Pi 通过可扩展的逐文件路由选择 Python、Rust 或 TypeScript/JavaScript 深度适配器；未知、冲突或没有完整语义单元的文件确定性回退到行窗口，并保留选路和实际降级原因。
 - 提供默认不执行的真实模型 paired A/B eval runner，对比 baseline 与 Imitator + 独立 judge，并记录验收通过率、耗时和变更文件数。
 - 不 clone、不安装、不构建、不执行上游内容；远程文本永远按不可信数据处理。
 - provider-neutral 核心零运行时依赖，Node.js 22.18+ 可直接运行 TypeScript；Pi 与 TypeBox 只作为扩展宿主 peer 和开发期兼容性测试依赖。
@@ -151,6 +152,12 @@ Pi 只是一层薄适配器：“参考发现”和 deterministic gate 仍是可
 
 ## 当前边界与后续演进
 
-Python 参考学习已增加可选的标准库 AST/TOML/INI 解析：读到内容才计算覆盖，源码/实际测试保底，条件导入与歧义保真，以及字段、协议/抽象类、导出、fixture 候选和 Poetry/setup.cfg 规格提取。Pi 需要可用的 Python 3.11+；不可用时明确报告，必要证据不足会阻断参考。配置和限制见 [Python 参考学习](docs/python-learning.md)。
+Python 参考学习已增加可选的标准库 AST/TOML/INI 解析：读到内容才计算覆盖，源码/实际测试保底，条件导入与歧义保真，以及字段、协议/抽象类、导出、fixture 候选和 Poetry/setup.cfg 规格提取。Pi 需要可用的 Python 3.11+；不可用时明确降为 textual evidence，必要模态不足仍会阻断参考。配置和限制见 [Python 参考学习](docs/python-learning.md)。
 
-见 [Design Dossier 协议](docs/design-dossier.md) 与 [架构和边界](docs/architecture.md)。当前已经实现 provider-neutral 的结构化协议、Repository Design Atlas、Evidence Bundle、事实/观察/推断/未知分级、Pi 双重持久门禁、人工/独立 judge 确认、TS/JS 和可选 Python AST 切片及五阶段 paired A/B eval。Atlas 支持 Node manifest、TS/JS 相对 import，以及通过适配器注入的 Python 项目和导入结构；其他生态仍以树结构索引。尚未证明真实模型质量收益。后续重点是本地项目同构 Atlas、更多语言 parser，以及真实任务的受控对照实验。
+Rust 参考学习已增加 dependency-free 静态语义分析：trait/impl、数据结构、可见性、错误/unsafe 信号、cfg/module/use、内嵌 `#[test]` 与 Cargo 规格进入 Atlas 和完整声明切片；不要求本机 Rust，也绝不编译或执行参考。配置和边界见 [Rust 参考学习](docs/rust-learning.md)。
+
+源码语义入口现在由显式逐文件路由管理，支持多语言仓库、失败不串 parser、歧义 fail closed，并为后续语言保留 `SourceLanguageAdapter` 注册插槽。详见 [源码语义路由](docs/source-routing.md)。
+
+解析能力不会直接奖励仓库设计分。独立的语义证据质量层将可读内容、完整语法单元、静态关系和实现—测试交叉印证分开记录，并修复“增强语言解析失败就像没有内容、普通语言非空就通过”的覆盖不对称。详见 [语义证据质量](docs/semantic-evidence-quality.md)。
+
+见 [Design Dossier 协议](docs/design-dossier.md)、[Reference Semantic Blueprint](docs/semantic-blueprint.md) 与 [架构和边界](docs/architecture.md)。当前已经实现 provider-neutral 的结构化协议、Repository Design Atlas、Evidence Bundle、事实/观察/推断/未知分级、Pi 双重持久门禁、人工/独立 judge 确认、逐文件语义路由、TS/JS、可选 Python AST 和 Rust 静态语义切片及五阶段 paired A/B eval。Atlas 支持 Node/Cargo/Python manifest、TS/JS 相对 import、Python 包候选与 Rust 模块候选；其他生态仍以树结构索引。尚未证明真实模型质量收益。下一阶段先把深度解析结果编译为有界 Semantic Blueprint 并驱动 Dossier 和本地映射，再继续扩展语言或更深静态分析。

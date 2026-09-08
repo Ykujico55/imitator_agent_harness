@@ -1,7 +1,10 @@
 /** Syntax observations only: never proof of runtime behavior or design intent. */
+export type SourceLanguage = "python" | "rust" | (string & {});
+export type SourceSymbolKind = "class" | "function" | "async-function" | "module" | "struct" | "union" | "enum" | "trait" | "impl" | "type" | "const" | "static" | "macro" | (string & {});
+
 export type SourceSymbol = {
   name: string;
-  kind: "class" | "function" | "async-function";
+  kind: SourceSymbolKind;
   startLine: number;
   endLine: number;
   signature: string;
@@ -12,27 +15,34 @@ export type SourceSymbol = {
   assertionCount: number;
   role: "implementation" | "test" | "fixture";
   traits?: string[];
-  fields?: Array<{ name: string; annotation: string; defaultValue: string; line: number; kind: "class" | "instance" }>;
+  fields?: Array<{ name: string; annotation: string; defaultValue: string; line: number; kind: "class" | "instance" | "struct" | "variant" }>;
   parameters?: string[];
   fixtureName?: string;
   fixtureRequests?: string[];
   hasBody?: boolean;
+  visibility?: string;
+  attributes?: string[];
+  errorSignals?: string[];
+  unsafeCount?: number;
+  variants?: string[];
+  implementedFor?: string;
 };
 
-export type PythonImport = {
+export type SourceImport = {
   module: string; names: string[]; level: number; line: number;
   aliases?: Array<{ name: string; asName: string | null }>;
   scope?: string;
   context?: string[];
+  kind?: "import" | "use" | "module";
 };
 
 export type SourceAnalysis = {
-  language: "python";
+  language: SourceLanguage;
   status: "parsed" | "invalid" | "unavailable" | "budget-exceeded";
   parser: string;
   limitations: string[];
   symbols: SourceSymbol[];
-  imports: PythonImport[];
+  imports: SourceImport[];
   exports?: { names: string[]; status: "static" | "dynamic" | "implicit" };
   manifest?: {
     packageName?: string;
@@ -44,6 +54,9 @@ export type SourceAnalysis = {
     format?: string;
     completeness?: "complete" | "partial" | "unsupported";
     importRoots?: string[];
+    edition?: string;
+    features?: string[];
+    targets?: Array<{ name: string; kind: string; path?: string }>;
   };
 };
 

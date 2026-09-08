@@ -14,9 +14,11 @@ import type { GitHubClient } from "./github.ts";
 import { taskTerms } from "./query.ts";
 import { isCodeFile, isImplementationPath, isTestPath, isTestSupportPath, isPythonPackageMarker } from "./evidence-path.ts";
 import type { SourceAnalyzer, SourceAnalysis } from "./source-analysis.ts";
+import type { SourceRouteDecision, SourceRouteResolver } from "./source-routing.ts";
 import { pythonImportRoots, resolvePythonImport, resolvePythonModule } from "./python-relations.ts";
 import { hasSourceEvidence, hasTestEvidence } from "./coverage-evidence.ts";
 import { linkPythonFixtures } from "./python-fixtures.ts";
+import { resolveRustImport } from "./rust-relations.ts";
 
 const MANIFEST = /(^|\/)(package\.json|pyproject\.toml|setup\.cfg|Cargo\.toml|go\.mod|pom\.xml|build\.gradle(?:\.kts)?)$/i;
 const AUTOMATION = /^\.github\/workflows\/.*\.ya?ml$/i;
@@ -113,6 +115,10 @@ function moduleRoot(path: string): { rootPath: string; kind: RepositoryDesignAtl
   }
   if (/(^|\/)(examples?|samples?)(\/|$)/i.test(path)) return { rootPath: parts.length > 1 ? parts[0]! : ".", kind: "example" };
   if (/\.py$/i.test(path)) return { rootPath: parts.length > 1 ? parts[0]! : ".", kind: "library" };
+  if (/\.rs$/i.test(path)) {
+    const source = parts.lastIndexOf("src");
+    return { rootPath: source >= 0 ? parts.slice(0, source + 1).join("/") : parts.length > 1 ? parts[0]! : ".", kind: "library" };
+  }
   return undefined;
 }
 
@@ -181,6 +187,7 @@ export async function buildRepositoryDesignAtlas(
   config: HarnessConfig,
   contentCache = new Map<string, string>(),
   sourceAnalyzer?: SourceAnalyzer,
+  sourceRouteResolver?: SourceRouteResolver,
 ): Promise<RepositoryDesignAtlas> {
   const files = blobPaths(repository.tree);
   const fileSet = new Set(files);
@@ -201,11 +208,14 @@ export async function buildRepositoryDesignAtlas(
   });
   const contents = new Map<string, string>();
   const analyses = new Map<string, SourceAnalysis>();
+  const sourceRoutes = new Map<string, SourceRouteDecision>();
   let analysisCharacters = 0;
   const attemptedPaths = new Set<string>();
   const completePaths = new Set<string>();
   const readFailures: Array<{ path: string; reason: string }> = [];
-  const groups = { source: sourcePaths, test: testPaths, manifest: manifestPaths, overview: overviewPaths, design: designPaths, automation: automationPaths };
+  // Rust unit tests commonly live beside implementation in src/lib.rs.
+  const semanticTestPaths = unique([...testPaths, ...sourcePaths.filter((path) => /\.rs$/i.test(path))]);
+  const groups = { source: sourcePaths, test: semanticTestPaths, manifest: manifestPaths, overview: overviewPaths, design: designPaths, automation: automationPaths };
   const qualified = (path: string, category: keyof typeof groups): boolean => {
     if (!completePaths.has(path)) return false;
     const content = contents.get(path)!;
@@ -242,6 +252,18 @@ export async function buildRepositoryDesignAtlas(
       const remaining = config.atlas.maxTotalCharacters - characters;
       const bounded = content.slice(0, remaining);
       contents.set(path, bounded);
+      if (sourceRouteResolver) {
+        try { sourceRoutes.set(path, sourceRouteResolver({ path })); }
+        catch {
+          sourceRoutes.set(path, {
+            selectedAnalyzer: "structural-fallback",
+            routeReason: "source-route-resolver-failed",
+            selectionStatus: "structural-fallback",
+            capabilities: [],
+            fallback: "line-window",
+          });
+        }
+      }
       if (bounded.length === content.length && content.trim()) completePaths.add(path);
       else readFailures.push({ path, reason: content.trim() ? "content-truncated" : "empty-content" });
       characters += bounded.length;
@@ -253,13 +275,17 @@ export async function buildRepositoryDesignAtlas(
             if (analysis) {
               const size = JSON.stringify(analysis).length;
               if (analysisCharacters + size <= 40_000) { analyses.set(path, analysis); analysisCharacters += size; }
-              else analyses.set(path, { language: "python", parser: analysis.parser, status: "budget-exceeded", symbols: [], imports: [], limitations: ["Atlas syntax metadata budget exhausted; no further observations included."] });
+              else analyses.set(path, { language: analysis.language, parser: analysis.parser, status: "budget-exceeded", symbols: [], imports: [], limitations: ["Atlas syntax metadata budget exhausted; no further observations included."] });
             }
           } catch {
-            if (/\.py$|(^|\/)(pyproject\.toml|setup\.cfg)$/i.test(path)) analyses.set(path, { language: "python", parser: "adapter", status: "unavailable", symbols: [], imports: [], limitations: ["Source analysis adapter failed; structural fallback only."] });
+            const routedLanguage = sourceRoutes.get(path)?.analysisLanguage;
+            const language = routedLanguage ?? (/\.rs$|(^|\/)Cargo\.toml$/i.test(path) ? "rust" : /\.py$|(^|\/)(pyproject\.toml|setup\.cfg)$/i.test(path) ? "python" : undefined);
+            if (language) analyses.set(path, { language, parser: sourceRoutes.get(path)?.selectedAnalyzer ?? "adapter", status: "unavailable", symbols: [], imports: [], limitations: ["Selected source analysis adapter failed; structural fallback only."] });
           }
-        } else if (/\.py$|(^|\/)(pyproject\.toml|setup\.cfg)$/i.test(path)) {
-          analyses.set(path, { language: "python", parser: "not-run", status: "budget-exceeded", symbols: [], imports: [], limitations: ["Atlas budget truncated this file; no AST or TOML parse claimed."] });
+        } else {
+          const routedLanguage = sourceRoutes.get(path)?.analysisLanguage;
+          const language = routedLanguage ?? (/\.rs$|(^|\/)Cargo\.toml$/i.test(path) ? "rust" : /\.py$|(^|\/)(pyproject\.toml|setup\.cfg)$/i.test(path) ? "python" : undefined);
+          if (language) analyses.set(path, { language, parser: sourceRoutes.get(path)?.selectedAnalyzer ?? "not-run", status: "budget-exceeded", symbols: [], imports: [], limitations: ["Atlas budget truncated this file; no complete syntax or manifest parse claimed."] });
         }
       }
     } catch (error) {
@@ -279,7 +305,7 @@ export async function buildRepositoryDesignAtlas(
     };
     const content = contents.get(path);
     if (!content) return { ...base, parseStatus: attemptedPaths.has(path) ? "unreadable" as const : "not-inspected" as const };
-    if (/pyproject\.toml$|setup\.cfg$/i.test(path)) {
+    if (/pyproject\.toml$|setup\.cfg$|Cargo\.toml$/i.test(path)) {
       const analysis = analyses.get(path);
       if (analysis?.status === "parsed" && analysis.manifest) {
         const { entryTargets: _entryTargets, ...manifest } = analysis.manifest;
@@ -298,13 +324,23 @@ export async function buildRepositoryDesignAtlas(
   });
 
   const entryPaths = new Set(sourcePaths.filter((path) => ENTRY.test(path)));
-  const pythonRoots = pythonImportRoots(fileSet, [...analyses].map(([path, analysis]) => ({ path, roots: analysis.manifest?.importRoots ?? [] })));
-  for (const [path, analysis] of analyses) if (analysis.manifest) {
+  const pythonRoots = pythonImportRoots(fileSet, [...analyses].filter(([, analysis]) => analysis.language === "python").map(([path, analysis]) => ({ path, roots: analysis.manifest?.importRoots ?? [] })));
+  for (const [path, analysis] of analyses) if (analysis.language === "python" && analysis.manifest) {
     const root = posix.dirname(path);
     for (const entry of analysis.manifest.entryTargets) {
       const localRoots = pythonImportRoots(new Set([path]), [{ path, roots: analysis.manifest.importRoots ?? [] }]).filter((item) => root === "." || item === root || item.startsWith(`${root}/`));
       const target = resolvePythonModule(entry.split(":")[0]!, localRoots, fileSet);
       if (target) entryPaths.add(target);
+    }
+  }
+  for (const [path, analysis] of analyses) if (analysis.language === "rust" && analysis.manifest) {
+    for (const entry of analysis.manifest.entryTargets) {
+      const resolved = posix.normalize(posix.join(posix.dirname(path), entry));
+      if (fileSet.has(resolved)) entryPaths.add(resolved);
+    }
+    for (const conventional of ["src/lib.rs", "src/main.rs"]) {
+      const resolved = posix.normalize(posix.join(posix.dirname(path), conventional));
+      if (fileSet.has(resolved)) entryPaths.add(resolved);
     }
   }
   for (const path of manifestPaths.filter((value) => /package\.json$/i.test(value))) {
@@ -344,13 +380,13 @@ export async function buildRepositoryDesignAtlas(
   const unresolvedImports: NonNullable<RepositoryDesignAtlas["unresolvedImports"]> = [];
   for (const [from, analysis] of analyses) if (analysis.status === "parsed") {
     for (const item of analysis.imports) {
-      const resolution = resolvePythonImport(from, item, fileSet, pythonRoots);
+      const resolution = analysis.language === "rust" ? resolveRustImport(from, item, fileSet) : resolvePythonImport(from, item, fileSet, pythonRoots);
       if (resolution.reason && unresolvedImports.length < 200) unresolvedImports.push({ ...sourceRef(repository, from), module: ".".repeat(item.level) + item.module, line: item.line, reason: resolution.reason, scope: item.scope ?? "module", context: item.context ?? [] });
       for (const to of resolution.targets) {
       if (relations.length >= 500) break;
-      const kind = isTestPath(from) ? "tests" as const : "imports" as const;
+      const kind = isTestPath(from) || analysis.language === "rust" && (item.context ?? []).some((value) => /cfg\s*\(\s*test\s*\)/.test(value)) ? "tests" as const : "imports" as const;
       if (!relations.some((edge) => edge.from === from && edge.to === to && edge.kind === kind && edge.evidence.sourceUrl.endsWith(`#L${item.line}`))) {
-        relations.push({ from, to, kind, resolution: "static-candidate", scope: item.scope ?? "module", context: item.context ?? [], aliases: item.aliases ?? [], evidence: { path: from, sourceUrl: `${sourceRef(repository, from).sourceUrl}#L${item.line}` } });
+        relations.push({ from, to, kind, resolution: analysis.language === "rust" ? "rust-module-candidate" : "static-candidate", scope: item.scope ?? "module", context: item.context ?? [], aliases: item.aliases ?? [], evidence: { path: from, sourceUrl: `${sourceRef(repository, from).sourceUrl}#L${item.line}` } });
       }
       }
     }
@@ -360,7 +396,7 @@ export async function buildRepositoryDesignAtlas(
     design: designPaths.filter((path) => qualified(path, "design")),
     manifest: manifestPaths.filter((path) => qualified(path, "manifest")),
     source: sourcePaths.filter((path) => qualified(path, "source")),
-    test: testPaths.filter((path) => qualified(path, "test")),
+    test: semanticTestPaths.filter((path) => qualified(path, "test")),
     automation: automationPaths.filter((path) => qualified(path, "automation")),
   };
   const coverage = buildCoverage(repository, config, categories, relations);
@@ -384,10 +420,15 @@ export async function buildRepositoryDesignAtlas(
     fixtureRelations: linkPythonFixtures(analyses),
     readFailures,
     coverageBasis: "read-content-v2",
-    testFiles: testPaths.slice(0, 120).map((path) => sourceRef(repository, path)),
+    testFiles: unique([...testPaths, ...[...analyses].filter(([path, analysis]) => /\.rs$/i.test(path) && analysis.symbols.some((symbol) => symbol.role === "test" && symbol.hasBody !== false)).map(([path]) => path)]).slice(0, 120).map((path) => sourceRef(repository, path)),
     automationFiles: automationPaths.slice(0, 40).map((path) => sourceRef(repository, path)),
     inspectedFiles: [...contents.keys()].sort().map((path) => sourceRef(repository, path)),
     ...(sourceAnalyzer ? { sourceAnalyses: [...analyses].sort(([a], [b]) => a.localeCompare(b)).map(([path, analysis]) => ({ ...sourceRef(repository, path), ...analysis })) } : {}),
+    ...(sourceRouteResolver ? { sourceRoutes: [...sourceRoutes].sort(([a], [b]) => a.localeCompare(b)).map(([path, route]) => ({
+      ...sourceRef(repository, path),
+      ...route,
+      analysisStatus: analyses.get(path)?.status ?? (route.capabilities.includes("syntax-analysis") ? "not-produced" as const : "not-applicable" as const),
+    })) } : {}),
     coverage,
   };
 }
@@ -428,12 +469,18 @@ export function renderDesignAtlases(atlases: RepositoryDesignAtlas[]): string {
       "Resolved means a static file target, not verified runtime loading; modules and document lists above are tree indexes, not coverage claims.",
       ...atlas.relations.filter((edge) => edge.scope !== undefined).map((edge) => `Static import ${edge.from} → ${edge.to}; scope: ${edge.scope}; context: ${edge.context?.join("; ") || "unconditional syntax"}; aliases: ${edge.aliases?.map((alias) => `${alias.name}${alias.asName ? ` as ${alias.asName}` : ""}`).join(", ") || "none"}; source: ${edge.evidence.sourceUrl}`),
       ...(atlas.readFailures ?? []).map((item) => `Read incomplete ${item.path}: ${item.reason}`),
+      ...(atlas.analysisQuality ? [
+        `Semantic evidence quality: ${atlas.analysisQuality.score}/100 [${atlas.analysisQuality.calibrationStatus}]; highest strength: ${atlas.analysisQuality.highestStrength}`,
+        `Semantic quality signals: ${atlas.analysisQuality.signals.map((signal) => `${signal.name} +${signal.points}`).join(", ") || "none"}`,
+        `Semantic quality limits: ${atlas.analysisQuality.limitations.join("; ")}`,
+      ] : []),
+      ...(atlas.sourceRoutes ?? []).map((route) => `Source route ${route.path}: ${route.selectedAnalyzer} [${route.selectionStatus}/${route.analysisStatus}] — ${route.routeReason}; capabilities: ${route.capabilities.join(", ") || "structural only"}; fallback: ${route.fallback}`),
       ...(atlas.sourceAnalyses ?? []).flatMap((analysis) => [
-        `Python syntax: ${analysis.path} [${analysis.status}] — ${analysis.symbols.length} declarations; ${analysis.imports.length} imports`,
+        `${analysis.language === "rust" ? "Rust" : analysis.language === "python" ? "Python" : analysis.language} syntax: ${analysis.path} [${analysis.status}] — ${analysis.symbols.length} declarations; ${analysis.imports.length} imports`,
         `Limits: ${analysis.limitations.join("; ")}`,
         `Exports: ${analysis.exports?.status ?? "unknown"} — ${analysis.exports?.names.join(", ") ?? ""}`,
         ...analysis.symbols.flatMap((symbol) => [
-          `- ${symbol.name} [${symbol.kind}/${symbol.role}] ${analysis.path}:${symbol.startLine}-${symbol.endLine}; ${symbol.signature}; bases: ${symbol.bases.join(", ")}; traits: ${symbol.traits?.join(", ") ?? ""}; raises: ${symbol.raises.join(", ")}; catches: ${symbol.catches.join(", ")}; assertions: ${symbol.assertionCount}`,
+          `- ${symbol.name} [${symbol.kind}/${symbol.role}] ${analysis.path}:${symbol.startLine}-${symbol.endLine}; ${symbol.signature}; visibility: ${symbol.visibility ?? "unknown"}; bases: ${symbol.bases.join(", ")}; traits: ${symbol.traits?.join(", ") ?? ""}; raises: ${symbol.raises.join(", ")}; catches: ${symbol.catches.join(", ")}; error signals: ${symbol.errorSignals?.join(", ") ?? ""}; unsafe: ${symbol.unsafeCount ?? 0}; assertions: ${symbol.assertionCount}`,
           ...(symbol.fields ?? []).map((field) => `  - ${field.kind} field ${field.name}: ${field.annotation} = ${field.defaultValue} (${analysis.path}:${field.line})`),
         ]),
       ]),

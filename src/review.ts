@@ -60,6 +60,11 @@ export function buildReviewRequest(pack: ReferencePack): ReviewRequest {
           sourceUrl: slice.sourceUrl,
           reason: slice.reason,
           content: slice.content,
+          strategy: slice.strategy,
+          symbols: slice.symbols,
+          evidenceRoles: slice.evidenceRoles,
+          sourceRoute: slice.sourceRoute,
+          evidenceStrength: slice.evidenceStrength,
         })),
       };
     });
@@ -80,6 +85,7 @@ export function buildReviewRequest(pack: ReferencePack): ReviewRequest {
       "Every adopt/adapt decision requires domainFit.relation=same-domain, a rationale explaining shared product responsibilities, and domainFit.evidenceSliceIds citing inspected implementation/test behavior within evidenceSliceIds.",
       "Language, zero dependencies, ESM, README quality and generic testing conventions do not establish same-domain fit. Reject unrelated or merely adjacent repositories, even if those conventions transfer.",
       "Confidence measures evidence-backed suitability for this local task, not confidence that a generic pattern exists. Never raise it just to meet a threshold; obtain new evidence or reject.",
+      "analysisQuality and evidenceStrength measure bounded observability, not design merit. Treat textual-only, unresolved, parser-limited, and line-window evidence as explicit negative space; never reward a repository merely because an analyzer supports its language.",
       "The task domain profile and lexical evidence checks are hypotheses and necessary floors, not proof of semantic equivalence. The independent confirmer must verify the task grounding, aliases and actual cited behavior; keyword mentions alone do not establish a mechanism.",
     ],
     candidates,

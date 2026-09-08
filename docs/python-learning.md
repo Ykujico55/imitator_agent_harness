@@ -52,17 +52,18 @@ $env:IMITATOR_PYTHON = 'C:\path\to\python.exe'
 
 读取优先为源码与测试保底，再轮询 manifest、overview、design、automation 缺口。类别尚未形成证据时定向尝试该类别的其他候选，每次失败也占用 `atlas.maxFiles`；不无界扩大请求。最多尝试两个 `__init__.py`，优先非包入口。切片也优先实际覆盖来源，避免大量包入口挤掉核心实现。
 
-空、不可读、二进制、超大或截断文件留下 `readFailures`；覆盖不足仍拒绝学习，并保留读取原因。总字符预算耗尽时不会继续补读。默认七项权重和 source/test 必需项不变：分数衡量有限样本是否够进入审查，不是整个项目的语义覆盖率。非 Python 文件暂以完整非空读取为门槛，未增加对应语言的有效测试体分析。
+空、不可读、二进制、超大或截断文件留下 `readFailures`；覆盖不足仍拒绝学习，并保留读取原因。总字符预算耗尽时不会继续补读。默认七项权重和 source/test 必需项不变：分数衡量有限样本是否够进入审查，不是整个项目的语义覆盖率。解析不可用时只允许保守文本模式识别声明以及带 assertion 的测试候选，analysisQuality 保持 textual；其他未增强语言仍使用通用非空内容门槛，差异会明确进入质量负空间。
 
 配置文件的 `parseStatus` 区分 `parsed`、`partial`、`indexed` 等状态。Poetry、setup.cfg 或含动态/组引用的元数据明确不算完整解释；未知 pyproject 格式只索引，不报告空元数据为完全解析。此处 `partial` 描述元数据解释范围，不表示拿截断文件声称完成 AST。
 
 ## 输出在哪里
 
-- `DESIGN_ATLAS.json` / manifest 的 Atlas 中新增可选 `sourceAnalyses`，每项保留文件路径、固定 commit 的来源链接、解析状态与限制。
+- `DESIGN_ATLAS.json` / manifest 的 Atlas 中，`sourceAnalyses` 保留文件路径、固定 commit 的来源链接、解析状态与限制；`sourceRoutes` 另行记录为何选择该解析器及其 fallback。
+- `analysisQuality` 与切片 `evidenceStrength` 把文本可读、完整 AST、静态关系和跨模态印证分开；这些观察不增加仓库设计总分。
 - `DESIGN_ATLAS.md` 展示 Python 声明、字段、契约标记、导出、条件导入、异常与测试线索，以及读取失败原因。
 - Atlas 的 `unresolvedImports` 保留未定位原因、条件与作用域；`fixtureRelations` 使用 `candidate/unresolved`，不伪造已验证的注入关系。
 - Pi prepare 仅预览每文件最多 8 个声明、12 个导入；完整的有界观察在 Atlas 中。结构摘要不是替代源切片的评审证据。
-- 成功选择的 Python 声明切片标为 `strategy: "python-ast"`，`symbols` 记录限定名，原始代码、行号、许可证和 commit 来源保持可追溯。
+- 成功选择的 Python 声明切片标为 `strategy: "python-ast"`，`symbols` 记录限定名，`sourceRoute` 记录实际是否降级，原始代码、行号、许可证和 commit 来源保持可追溯。
 - 关系进入现有 Evidence Bundle，并使用已有 `relationships-evidence` 信号（10 分）；没有额外“Python 更优秀”加分。
 - Python 关系带 `resolution: "static-candidate"`，Bundle 同时声明运行时导入未验证以及包导出遮蔽的限制，不把候选文件边升级为确定的运行时依赖。
 
@@ -76,7 +77,7 @@ AST 窗口优先使用任务词在符号名和声明内容中的匹配，权重�
 
 解析状态包括 `parsed`、`invalid`、`unavailable`、`budget-exceeded`。Python 不存在、版本不支持语法、输入损坏、进程超时等情况下，不把部分文本冒充完整 AST。Atlas 对被字符预算截断的文件不进行完整语法解析。
 
-切片没有合适的完整声明时会退回 `line-window`；已选中的完整 AST 声明如果放不进剩余总字符预算，则跳过该片段，不在保持 AST 标志的同时截断它。Pi 的 Python 解析不可用/失败时保留状态，不允许缺失语义观察满足 Python 源码/测试门槛，因此可能直接阻断该参考。未注入适配器的核心调用方只使用保守文本门槛；两者都不声称完成 AST 理解。
+切片没有合适的完整声明时会退回 `line-window`；已选中的完整 AST 声明如果放不进剩余总字符预算，则跳过该片段，不在保持 AST 标志的同时截断它。Pi 的 Python 解析不可用/失败时保留状态：完整读取且匹配保守声明/测试候选的内容仍可满足 modality coverage，但只能成为 textual evidence，不能产生 syntactic、resolved 或 corroborated 主张。未注入适配器的核心调用方同样使用保守文本门槛；两者都不声称完成 AST 理解。
 
 ## 验证与边界
 

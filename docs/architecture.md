@@ -19,13 +19,13 @@
 3. Discovery 只读取 repository search、commit、Git tree 和 content API，不 clone 或运行仓库。
    搜索命中但候选画像因限额或网络错误无法完成时整次运行失败并保留错误原因，不得把不完整检查解释为“没有合适参考”。
 4. Assessor 给六个维度打 0–100 分，其中风险越高越差；领域最低分、总分和非许可证风险是硬门禁。许可证独立提示，默认 `warn`，仅显式 `allowlist` 模式实施许可证硬门禁。无论配置如何，进入 evidence space 的仓库硬限制为 1–2 个。
-5. Atlas builder 在固定文件/字符预算内建立 commit-pinned 仓库地图：manifest、模块、入口、设计文档、测试、CI 与可解析的相对依赖关系。七个命名信号形成可解释覆盖分，缺少配置要求的源码/测试证据时 fail closed。
-6. Slicer 使用 Atlas 中的入口、manifest 和设计文档作为结构优先级，并在紧预算下保底选择 documentation、manifest、test、implementation 等关键模态；TS/JS 及可选 Python 适配器优先选择完整 AST 声明或测试单元，未支持语言确定性回退到行窗口；预算在字符层硬截止。Atlas 要求的 source/test 等类别若未形成可读切片则 fail closed。
+5. Atlas builder 在固定文件/字符预算内建立 commit-pinned 仓库地图：manifest、模块、入口、设计文档、测试、CI 与可解析的相对依赖关系。七个命名信号形成可解释模态覆盖分，缺少配置要求的源码/测试证据时 fail closed；独立的 analysisQuality 再描述 textual、syntactic、resolved、corroborated 强度，不修改仓库设计评分。
+6. 逐文件 Source Router 根据路径确定唯一深度适配器；Python、Rust、TS/JS 各走自己的静态能力，多语言仓库不会被主语言标签误导。已支持语言解析失败不串到其他 parser，未知或歧义路径 fail closed 到结构/行窗口。Slicer 再使用 Atlas 中的入口、manifest 和设计文档作为结构优先级，并在紧预算下保底选择 documentation、manifest、test、implementation 等关键模态；预算在字符层硬截止。Atlas 要求的 source/test 等类别若未形成可读切片则 fail closed。
 7. Bundle compiler 围绕系统架构、模块边界、技术选型、测试策略和失败语义，把不同模态的切片与 Atlas 关系编译为有界证据包。单一模态不足时不制造关系结论；每个包记录限制与 `explicit|observed` 认识论上限。
 8. Renderer 生成机器可读 manifest、Design Atlas、Evidence Bundle、指定仓库评估结果、防提示注入的 agent 工作协议和 pack-bound 评审请求。未通过覆盖门禁的候选仅保留评分记录，其 Atlas 不进入学习产物。
 9. 人或外部 judge 先检查证据包再提交结构化决策；deterministic gate 校验 fingerprint、包/切片归属、置信度、风险和审查完整性，并再次限制最多两个仓库。
 10. Proposal 通过 deterministic gate 后仍进入 `awaiting_confirmation`；只有不同身份的人或独立 agent 才能确认参考集合。
-11. 参考确认后进入 `distilling`。agent 把每个参考派生主张标为 explicit、observed、inferred 或 unknown，再转换为语言无关的 Design Dossier。
+11. 参考确认后进入 `distilling`。深度解析结果先编译为有出处、有强度和负空间的 Reference Semantic Blueprint；agent 用它导航批准证据，把每个参考派生主张标为 explicit、observed、inferred 或 unknown，再转换为语言无关的 Design Dossier。Blueprint 是观察索引，不是新的仓库质量分或设计结论。
 12. Design gate 验证任务/pack 指纹、1–2 个仓库、包内证据归属、认识论上限、本地约束、概念完整性、适用边界、权衡、negative space、本地映射、目标路径、验收测试与 8 万字符预算。
 13. Dossier 通过后进入 `awaiting_design_confirmation`；第二个独立身份确认后才生成最终抽象 agent context、关闭原始证据读取并解锁编码。
 
@@ -74,6 +74,12 @@ Provider-neutral core 接受注入式 `SemanticSliceSelector`，本身保留零�
 
 Pi 同时注入可选 Python 标准库解析器，通过 `SourceAnalyzer` 向 Atlas 提供语法观察并复用到 `python-ast` 切片。解释器只解析 stdin 文本，不执行上游代码；缺失、超时、语法或预算问题明确降级。详见 [Python 参考学习](python-learning.md)。
 
+这些入口由 `SourceLanguageAdapter` 注册表逐文件路由。路由决策进入 Atlas `sourceRoutes`，实际语义/行窗口结果进入 slice `sourceRoute`；新语言可以增加适配器和自己的 strategy，而无需改动 pipeline 分支。详见 [源码语义路由](source-routing.md)。
+
+覆盖与解析强度是两套信号：完整读取但解析失败的保守源码/测试文本仍可满足 modality coverage，同时保持 textual 强度和失败限制；只有完整语义单元、静态关系及实现—测试关联才能获得更高 analysisQuality。该观察分不进入六维总分，也不构成运行时验证。详见 [语义证据质量](semantic-evidence-quality.md)。
+
+增强分析的产品出口是 [Reference Semantic Blueprint](semantic-blueprint.md)：它把已确认参考中的模块职责、公共契约、数据结构、静态关系、失败语义和测试概念编译成有界导航层，再由 Design Dossier 作证据分类和本地 adopt/adapt/reject 判断。增加解析深度前必须先证明新增观察能够进入这一链路，而不是只增加 Atlas 体积。
+
 ## Repository Design Atlas
 
 Atlas 是切片前的确定性结构层，不是第二份源码上下文。它只从 GitHub tree 和固定到 commit SHA 的有限文本读取中生成，记录来源路径和链接，不执行任何上游内容。当前能解析 Node manifest、常规入口和 TS/JS 相对 import；注入 Python 适配器后可解析静态 pyproject 元数据、声明和常规包布局下的静态 import，并把测试 import 标为 `tests` 关系；其他语言保留 manifest、目录、设计文档、测试与自动化索引。
@@ -81,6 +87,8 @@ Atlas 是切片前的确定性结构层，不是第二份源码上下文。它�
 覆盖分由 overview 10、design 20、manifest 10、source 20、test 20、automation 10、relationships 10 七个具名信号相加。新 Atlas 使用 `read-content-v2`：类别必须有完整读取的非空内容；Python 还要求声明/实际测试体观察，conftest 不充当测试。源码与测试优先保底，预算内按缺口补读，最多尝试两个 Python 包入口，失败和截断可追溯。默认门禁为至少 50 分且必须存在 source/test；配置只能在已知类别内选择，文件和字符预算有硬上限。覆盖充分只说明“有足够结构证据可供审查”，不证明架构优秀，也不证明模型推断出的设计理由真实。
 
 Python 静态结构包含字段、契约标记、公共导出与 fixture 候选；导入保留别名、作用域和条件，父包歧义拒绝解析。PEP 621、Poetry、setup.cfg 和安全字面量源码根均可提供观察，解释不完整时明确标记 partial/indexed。详细能力边界和合成回归测试见 [Python 参考学习](python-learning.md)。旧 pack 不自动补充新观察，需要重新 prepare。
+
+Rust integration 使用 dependency-free 的有界 lexer/结构 parser，抽取 trait/impl、字段/variant、公共面、错误/unsafe 信号、cfg/use/mod、内嵌测试和 Cargo 子集。Rust module edge 始终是带条件和来源行的 filesystem candidate；extern、宏生成和显式 path 不猜测。内嵌实现/测试按精确窗口形成多角色证据，`build.rs` 不满足应用 source。详见 [Rust 参考学习](rust-learning.md)。
 
 ## Evidence Bundle 与认识论边界
 

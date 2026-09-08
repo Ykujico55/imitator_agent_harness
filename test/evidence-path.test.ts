@@ -13,6 +13,7 @@ test("recognizes root, nested, Python and Go tests without requiring one project
   }
   for (const path of ["index.js", "cache.py", "src/lib.rs", "lib/cache.go", "src/main.java"]) assert.equal(isImplementationPath(path), true, path);
   for (const path of ["package.json", "README.md", "vite.config.ts", "src/index.d.ts"]) assert.equal(isBehaviorCodeFile(path), false, path);
+  assert.equal(isImplementationPath("build.rs"), false, "Cargo build support must not satisfy application source coverage");
 });
 
 test("root behavioral tests earn named maturity/design signals but a test-plan document does not", () => {

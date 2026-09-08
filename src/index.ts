@@ -17,3 +17,6 @@ export * from "./bundle.ts";
 export * from "./task.ts";
 export * from "./types.ts";
 export * from "./source-analysis.ts";
+export * from "./source-routing.ts";
+export * from "./analysis-quality.ts";
+export * from "./rust-relations.ts";

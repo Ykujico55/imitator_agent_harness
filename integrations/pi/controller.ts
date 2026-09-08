@@ -21,8 +21,7 @@ import type {
   TaskSpec,
 } from "../../src/types.ts";
 import { FilePiStateStore, inspectWorkspace, type PersistedPiPayload, type PiStateStore } from "./state.ts";
-import { selectTypeScriptAstWindow } from "../typescript-ast.ts";
-import { createPythonAnalysis } from "../python-ast.ts";
+import { createDefaultSourceRouter } from "../source-router.ts";
 import { mutationGateSignal, type PiControllerPhase } from "./contract.ts";
 
 export { MUTATION_TOOL_DENY_LIST } from "./contract.ts";
@@ -84,10 +83,9 @@ export const defaultPiHarnessRuntime: PiHarnessRuntime = {
     const taskIdentity = await inspectWorkspace(input, cwd);
     const config = await loadConfig(await optionalConfigPath(cwd));
     const client = new GitHubClient({ token: process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN });
-    const python = createPythonAnalysis();
+    const sourceRouter = createDefaultSourceRouter();
     const pack = await prepareReferencePack(client, taskIdentity.task, config, {
-      sourceAnalyzer: python.analyze,
-      semanticSelector: (input) => python.selectWindow(input) ?? selectTypeScriptAstWindow(input),
+      sourceRouter,
     });
     const directory = await writeReferencePack(pack, resolve(cwd, ".imitator", "reference"));
     return { pack, directory, config, taskIdentity };
@@ -326,16 +324,18 @@ export class PiHarnessController {
       dimensions: ReferencePack["assessments"][number]["dimensions"];
       atlas: {
         coverage: ReferencePack["atlases"][number]["coverage"];
+        analysisQuality: ReferencePack["atlases"][number]["analysisQuality"];
         modules: ReferencePack["atlases"][number]["modules"];
         entryPoints: string[];
         architectureDocuments: string[];
         relations: number;
         sourceAnalyses: NonNullable<ReferencePack["atlases"][number]["sourceAnalyses"]>;
+        sourceRoutes: NonNullable<ReferencePack["atlases"][number]["sourceRoutes"]>;
         unresolvedImports: ReferencePack["atlases"][number]["unresolvedImports"];
         fixtureRelations: ReferencePack["atlases"][number]["fixtureRelations"];
         coverageBasis: ReferencePack["atlases"][number]["coverageBasis"];
       };
-      slices: Array<{ id: string; path: string; lines: string; reason: string }>;
+      slices: Array<{ id: string; path: string; lines: string; reason: string; strategy?: ReferencePack["slices"][number]["strategy"]; evidenceRoles?: ReferencePack["slices"][number]["evidenceRoles"]; symbols?: string[]; sourceRoute?: ReferencePack["slices"][number]["sourceRoute"]; evidenceStrength?: ReferencePack["slices"][number]["evidenceStrength"] }>;
       bundles: Array<{
         id: string;
         concern: ReferencePack["bundles"][number]["concern"];
@@ -384,6 +384,7 @@ export class PiHarnessController {
           dimensions: candidate.dimensions,
           atlas: {
             coverage: candidate.atlas.coverage,
+            analysisQuality: candidate.atlas.analysisQuality,
             modules: candidate.atlas.modules,
             entryPoints: candidate.atlas.entryPoints.map((item) => item.path),
             architectureDocuments: candidate.atlas.architectureDocuments.map((item) => item.path),
@@ -395,12 +396,18 @@ export class PiHarnessController {
               ...analysis, symbols: analysis.symbols.slice(0, 8), imports: analysis.imports.slice(0, 12),
               limitations: [...analysis.limitations, "Prepare preview includes at most 8 declarations and 12 imports per file; full bounded observations are in the Design Atlas."],
             })),
+            sourceRoutes: candidate.atlas.sourceRoutes ?? [],
           },
           slices: candidate.slices.map((slice) => ({
             id: slice.id,
             path: slice.path,
             lines: `${slice.startLine}-${slice.endLine}`,
             reason: slice.reason,
+            strategy: slice.strategy,
+            evidenceRoles: slice.evidenceRoles,
+            symbols: slice.symbols,
+            sourceRoute: slice.sourceRoute,
+            evidenceStrength: slice.evidenceStrength,
           })),
           bundles: candidate.bundles.map((bundle) => ({
             id: bundle.id,
@@ -426,6 +433,11 @@ export class PiHarnessController {
     sourceUrl: string;
     license: string | null;
     content: string;
+    strategy?: ReferencePack["slices"][number]["strategy"];
+    evidenceRoles?: ReferencePack["slices"][number]["evidenceRoles"];
+    symbols?: string[];
+    sourceRoute?: ReferencePack["slices"][number]["sourceRoute"];
+    evidenceStrength?: ReferencePack["slices"][number]["evidenceStrength"];
   }>> {
     if (!this.#run) throw new Error("No prepared reference pack; call imitator_prepare first");
     if (this.#phase === "approved") throw new Error("Raw reference evidence is closed after design approval; use the approved Design Dossier context");
@@ -444,6 +456,11 @@ export class PiHarnessController {
         sourceUrl: slice.sourceUrl,
         license: slice.license,
         content: slice.content,
+        strategy: slice.strategy,
+        evidenceRoles: slice.evidenceRoles,
+        symbols: slice.symbols,
+        sourceRoute: slice.sourceRoute,
+        evidenceStrength: slice.evidenceStrength,
       };
     });
     unique.forEach((id) => this.#readEvidenceIds.add(id));
@@ -453,7 +470,7 @@ export class PiHarnessController {
 
   async getEvidenceBundles(ids: string[]): Promise<Array<{
     bundle: ReferencePack["bundles"][number];
-    slices: Array<Pick<ReferencePack["slices"][number], "id" | "repository" | "path" | "startLine" | "endLine" | "sourceUrl" | "license" | "reason">>;
+    slices: Array<Pick<ReferencePack["slices"][number], "id" | "repository" | "path" | "startLine" | "endLine" | "sourceUrl" | "license" | "reason" | "strategy" | "evidenceRoles" | "symbols" | "sourceRoute" | "evidenceStrength">>;
   }>> {
     if (!this.#run) throw new Error("No prepared reference pack; call imitator_prepare first");
     const unique = [...new Set(ids)];
@@ -470,8 +487,8 @@ export class PiHarnessController {
       const slices = bundle.evidenceSliceIds.map((sliceId) => {
         const slice = sliceById.get(sliceId);
         if (!slice) throw new Error(`Evidence bundle ${id} contains an unavailable slice: ${sliceId}`);
-        const { id: evidenceId, repository, path, startLine, endLine, sourceUrl, license, reason } = slice;
-        return { id: evidenceId, repository, path, startLine, endLine, sourceUrl, license, reason };
+        const { id: evidenceId, repository, path, startLine, endLine, sourceUrl, license, reason, strategy, evidenceRoles, symbols, sourceRoute, evidenceStrength } = slice;
+        return { id: evidenceId, repository, path, startLine, endLine, sourceUrl, license, reason, strategy, evidenceRoles, symbols, sourceRoute, evidenceStrength };
       });
       results.push({ bundle, slices });
     }

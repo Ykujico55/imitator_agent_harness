@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { GitHubClient } from "./github.ts";
 import { applyAtlasCoverageGate, buildRepositoryDesignAtlas, renderDesignAtlases } from "./atlas.ts";
-import { buildEvidenceBundles, evidenceKind, renderEvidenceBundles } from "./bundle.ts";
+import { buildEvidenceBundles, evidenceKindsForSlice, renderEvidenceBundles } from "./bundle.ts";
 import { rankSearchCandidates } from "./discovery.ts";
 import type { DesignConfirmation, DesignGateResult, GateResult, HarnessConfig, ReferencePack, RepositoryProfile, ReviewSubmission, TaskSpec } from "./types.ts";
 import { renderAdaptationBrief, renderDesignAgentContext, renderDesignDossier } from "./design-render.ts";
@@ -15,6 +15,8 @@ import { inferPractices, renderAgentContext, renderReference } from "./render.ts
 import { buildReviewRequest, buildReviewTemplate, renderGateReport } from "./review.ts";
 import { normalizeTaskSpec } from "./task.ts";
 import type { SourceAnalyzer } from "./source-analysis.ts";
+import type { SourceRouter, SourceRouteResolver } from "./source-routing.ts";
+import { annotateEvidenceStrength, buildAnalysisQualityReport } from "./analysis-quality.ts";
 
 async function mapLimited<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
@@ -33,8 +35,14 @@ export async function prepareReferencePack(
   client: GitHubClient,
   task: TaskSpec,
   config: HarnessConfig,
-  options: { semanticSelector?: SemanticSliceSelector; sourceAnalyzer?: SourceAnalyzer } = {},
+  options: { sourceRouter?: SourceRouter; semanticSelector?: SemanticSliceSelector; sourceAnalyzer?: SourceAnalyzer; sourceRouteResolver?: SourceRouteResolver } = {},
 ): Promise<ReferencePack> {
+  if (options.sourceRouter && (options.semanticSelector || options.sourceAnalyzer || options.sourceRouteResolver)) {
+    throw new Error("Provide sourceRouter as one unit, or provide its individual functions, not both");
+  }
+  const sourceAnalyzer = options.sourceRouter?.analyze ?? options.sourceAnalyzer;
+  const semanticSelector = options.sourceRouter?.selectWindow ?? options.semanticSelector;
+  const sourceRouteResolver = options.sourceRouter?.resolve ?? options.sourceRouteResolver;
   // Validate and bind the task vocabulary before any remote data can influence it.
   task = normalizeTaskSpec(task);
   const specified = normalizeSpecifiedRepositories(task.referenceRepositories) ?? [];
@@ -45,7 +53,7 @@ export async function prepareReferencePack(
       const repository = await client.getRepository(requested.repository);
       const profile = await client.profile(repository, requested.revision);
       const initial = { ...assessRepository(profile, task, config), selectionOrigin: "user-specified" as const };
-      const atlas = initial.accepted ? await buildRepositoryDesignAtlas(client, profile, task, config, contentCache, options.sourceAnalyzer) : undefined;
+      const atlas = initial.accepted ? await buildRepositoryDesignAtlas(client, profile, task, config, contentCache, sourceAnalyzer, sourceRouteResolver) : undefined;
       const assessment = atlas ? applyAtlasCoverageGate(initial, atlas, config) : initial;
       return {
         assessment,
@@ -97,7 +105,7 @@ export async function prepareReferencePack(
           continue;
         }
         const initial = { ...assessRepository(profile, task, config), selectionOrigin: "automatic" as const };
-        const atlas = initial.accepted ? await buildRepositoryDesignAtlas(client, profile, task, config, contentCache, options.sourceAnalyzer) : undefined;
+        const atlas = initial.accepted ? await buildRepositoryDesignAtlas(client, profile, task, config, contentCache, sourceAnalyzer, sourceRouteResolver) : undefined;
         const assessment = atlas ? applyAtlasCoverageGate(initial, atlas, config) : initial;
         automaticOutcomes.push({ assessment, atlas });
         if (assessment.accepted) acceptedAutomatic += 1;
@@ -125,7 +133,8 @@ export async function prepareReferencePack(
   const selectedRepositorySet = new Set(selectedRepositories);
   const selectedAtlases = atlases.filter((atlas) => selectedRepositorySet.has(atlas.repository));
   const sliceFailures: SliceReadFailure[] = [];
-  const slices = await collectSlices(client, assessments, task, config, options.semanticSelector, selectedAtlases, contentCache, sliceFailures);
+  const collectedSlices = await collectSlices(client, assessments, task, config, semanticSelector, selectedAtlases, contentCache, sliceFailures, sourceRouteResolver);
+  const slices = annotateEvidenceStrength(selectedAtlases, collectedSlices);
   if (selectedRepositories.length > 0 && slices.length === 0) {
     const reasons = [...new Set(sliceFailures.map((failure) => failure.reason))].slice(0, 3);
     throw new Error(`Accepted repositories produced no readable evidence slices${reasons.length ? `: ${reasons.join("; ")}` : ""}`);
@@ -138,14 +147,15 @@ export async function prepareReferencePack(
     return [];
   }))];
   for (const repository of selectedRepositories) {
-    const presentKinds = new Set(slices.filter((slice) => slice.repository === repository).map(evidenceKind));
+    const presentKinds = new Set(slices.filter((slice) => slice.repository === repository).flatMap(evidenceKindsForSlice));
     const missingKinds = requiredKinds.filter((kind) => !presentKinds.has(kind));
     if (missingKinds.length > 0) {
       const reasons = [...new Set(sliceFailures.filter((failure) => failure.repository === repository).map((failure) => failure.reason))].slice(0, 3);
       throw new Error(`Repository ${repository} is missing required ${missingKinds.join(", ")} evidence slices after bounded reads${reasons.length ? `: ${reasons.join("; ")}` : ""}`);
     }
   }
-  const bundles = buildEvidenceBundles(selectedAtlases, slices, config);
+  const qualityAtlases = selectedAtlases.map((atlas) => ({ ...atlas, analysisQuality: buildAnalysisQualityReport(atlas, slices) }));
+  const bundles = buildEvidenceBundles(qualityAtlases, slices, config);
   for (const repository of selectedRepositories) {
     if (!bundles.some((bundle) => bundle.repository === repository)) {
       throw new Error(`Repository ${repository} produced slices but no evidence bundle with ${config.bundles.minimumEvidenceKinds} distinct evidence kinds`);
@@ -154,7 +164,7 @@ export async function prepareReferencePack(
   return {
     schemaVersion: 4,
     generatedAt: new Date().toISOString(),
-    task, queries, assessments, atlases: selectedAtlases, slices, bundles,
+    task, queries, assessments, atlases: qualityAtlases, slices, bundles,
     practices: inferPractices({ assessments, slices }),
     selection: {
       schemaVersion: 1,

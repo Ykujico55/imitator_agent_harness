@@ -15,6 +15,7 @@ export function inferPractices(pack: Pick<ReferencePack, "assessments" | "slices
   const practices = new Set<string>();
   if (paths.some((path) => /architecture|design|adr/.test(path))) practices.add("Record important design decisions next to the implementation and keep them reviewable.");
   if (paths.some((path) => /test|spec/.test(path))) practices.add("Use upstream tests as behavioral evidence; reproduce the invariant with tests written for the local API.");
+  if (pack.slices.some((slice) => slice.evidenceRoles?.includes("test"))) practices.add("Use upstream tests as behavioral evidence; reproduce the invariant with tests written for the local API.");
   if (paths.some((path) => /example|sample/.test(path))) practices.add("Keep one small end-to-end example as the executable contract for the main workflow.");
   if (pack.assessments.some((item) => item.dimensions.engineeringMaturity.reasons.includes("Automated CI workflow"))) practices.add("Make verification automatic and keep the same checks available locally and in CI.");
   practices.add("Adopt interfaces and invariants only after checking them against local constraints; do not transplant upstream structure by default.");
@@ -33,6 +34,12 @@ export function renderReference(pack: ReferencePack): string {
     "| Repository | Origin | Overall | Domain | Maturity | Transfer | Clarity | Design | Risk | Atlas | Accepted |",
     "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|:---:|", ...pack.assessments.map(assessmentTable), "",
     `Accepted ${accepted.length} of ${pack.assessments.length} inspected repositories.`, "",
+    "## Semantic evidence quality", "",
+    "This observational score measures how strongly the bounded evidence was parsed and connected. It is not part of repository design scoring.", "",
+    ...pack.atlases.flatMap((atlas) => atlas.analysisQuality ? [
+      `- ${atlas.repository}: ${atlas.analysisQuality.score}/100; highest ${atlas.analysisQuality.highestStrength}; ${atlas.analysisQuality.signals.map((signal) => signal.name).join(", ") || "no semantic signals"}`,
+      `  Limits: ${atlas.analysisQuality.limitations.join("; ")}`,
+    ] : [`- ${atlas.repository}: legacy/unknown`]), "",
     "## License and use restrictions", "",
     ...pack.assessments.flatMap((item) => [
       `### ${item.repository.fullName} — ${item.repository.license ?? "unknown"}`, "",
@@ -43,7 +50,7 @@ export function renderReference(pack: ReferencePack): string {
     "Each bundle groups multiple evidence modalities around one design question. Its epistemic ceiling limits how strongly the evidence may be described.", "",
     ...pack.bundles.flatMap((bundle) => [
       `### ${bundle.id} — ${bundle.concern}`, "",
-      `Repository: ${bundle.repository} · Ceiling: ${bundle.epistemicCeiling} · Kinds: ${bundle.evidenceKinds.join(", ")} · Slices: ${bundle.evidenceSliceIds.join(", ")}`,
+      `Repository: ${bundle.repository} · Ceiling: ${bundle.epistemicCeiling} · Strength: ${bundle.evidenceStrength ? `${bundle.evidenceStrength.weakest}..${bundle.evidenceStrength.strongest}` : "legacy/unknown"} · Kinds: ${bundle.evidenceKinds.join(", ")} · Slices: ${bundle.evidenceSliceIds.join(", ")}`,
       "", bundle.question, "", `Limitations: ${bundle.limitations.join("; ") || "none recorded"}`, "",
     ]),
     "## Evidence slices", "",
@@ -52,7 +59,8 @@ export function renderReference(pack: ReferencePack): string {
     const marker = fence(slice.content);
     lines.push(
       `### ${slice.repository} — ${slice.path}:${slice.startLine}`, "",
-      `Source: [${slice.repository}/${slice.path}](${slice.sourceUrl}) · License: ${slice.license ?? "unknown"} · Why selected: ${slice.reason}`,
+      `Source: [${slice.repository}/${slice.path}](${slice.sourceUrl}) · License: ${slice.license ?? "unknown"} · Strategy: ${slice.strategy ?? "line-window"} · Roles: ${slice.evidenceRoles?.join(", ") || "path-classified"} · Why selected: ${slice.reason}`,
+      `Evidence strength: ${slice.evidenceStrength?.level ?? "legacy/unknown"}; signals: ${slice.evidenceStrength?.signals.join(", ") || "none"}; limitations: ${slice.evidenceStrength?.limitations.join("; ") || "none recorded"}`,
       "", `${marker}text`, slice.content, marker, "",
     );
   }

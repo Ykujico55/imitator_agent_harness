@@ -24,6 +24,8 @@ Design Dossier 是 reference selection 与实际编码之间的压缩层。它�
 
 Repository Design Atlas 随 request 提供模块、入口、manifest、测试和依赖关系索引，帮助 agent 判断应该读取哪些证据以及概念处于什么结构位置。Atlas 事实不能替代 slice ID：尤其是技术选型理由，若 ADR/RFC 或其他批准证据没有明确说明，就必须视为未知或模型推断，不能写成上游作者的明确意图。
 
+Reference Semantic Blueprint 是 Atlas 与 Dossier 之间的有界观察索引。它把语言增强解析器发现的模块、契约、数据结构、静态关系、失败路径和测试结构组织成可迁移机制，并保留 slice/bundle 来源、证据强度和解析限制。Blueprint 帮助 agent 找到值得讨论的结构，但不能替代 claim、slice 引用或独立确认；详见 [Reference Semantic Blueprint](semantic-blueprint.md)。
+
 Evidence Bundle 是 claim 的最小关系边界。Claim 引用的支持和反证切片必须属于它引用的包。`explicit` 必须引用上限为 explicit 的包，并直接引用 ADR、RFC、architecture 或 design 文档切片；`observed` 必须有支持切片；`inferred` 必须有支持切片、明确限制且置信度不高于 0.8；`unknown` 必须说明缺失什么，置信度不高于 0.2，并且不能单独支撑设计概念。
 
 ## 确定性不变量

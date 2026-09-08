@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { EvidenceBundle, EvidenceKind, EvidenceSlice, HarnessConfig, RepositoryDesignAtlas } from "./types.ts";
 import { isTestPath, isTestSupportPath } from "./evidence-path.ts";
+import { summarizeBundleStrength } from "./analysis-quality.ts";
 
 const DOCUMENTATION = /(^|\/)(README|docs?|architecture|design|adr|rfcs?)(\/|\.|$)|(^|\/)(ADR|RFC)-?\d+/i;
 const DESIGN_DECISION = /(^|\/)(architecture|design|adr|rfcs?)(\/|\.|$)|(^|\/)(ADR|RFC)-?\d+/i;
@@ -14,9 +15,18 @@ export function supportsExplicitIntent(slice: Pick<EvidenceSlice, "path">): bool
 export function evidenceKind(slice: EvidenceSlice): EvidenceKind {
   if (MANIFEST.test(slice.path)) return "manifest";
   if (isTestSupportPath(slice.path)) return "test-support";
+  if (slice.evidenceRoles?.includes("test") && !slice.evidenceRoles.includes("implementation")) return "test";
   if (isTestPath(slice.path)) return "test";
   if (DOCUMENTATION.test(slice.path)) return "documentation";
   return "implementation";
+}
+
+export function evidenceKindsForSlice(slice: EvidenceSlice): EvidenceKind[] {
+  const semantic = slice.evidenceRoles ?? [];
+  const kinds: EvidenceKind[] = [];
+  if (semantic.includes("implementation")) kinds.push("implementation");
+  if (semantic.includes("test")) kinds.push("test");
+  return kinds.length ? kinds : [evidenceKind(slice)];
 }
 
 function unique<T>(values: T[]): T[] {
@@ -55,7 +65,7 @@ function createBundle(input: {
   const selectedPaths = new Set(selected.map((slice) => slice.path));
   const relations = input.atlas.relations.filter((relation) => selectedPaths.has(relation.from) || selectedPaths.has(relation.to)).slice(0, 24);
   const evidenceKinds = unique([
-    ...selected.map(evidenceKind),
+    ...selected.flatMap(evidenceKindsForSlice),
     ...(relations.length ? ["relationship" as const] : []),
   ]).sort();
   if (evidenceKinds.length < input.config.bundles.minimumEvidenceKinds) return undefined;
@@ -65,7 +75,9 @@ function createBundle(input: {
   if (!relations.length) limitations.push("No resolved dependency relation connects the selected evidence within the bounded Atlas inspection.");
   if (!evidenceKinds.includes("test")) limitations.push("This bundle has no direct test evidence.");
   if (relations.some((edge) => edge.resolution === "static-candidate")) limitations.push("Python relations identify static file candidates, not verified runtime imports; package exports can shadow from-import child modules.");
+  if (relations.some((edge) => edge.resolution === "rust-module-candidate")) limitations.push("Rust relations are filesystem-backed module candidates; cfg evaluation, macro expansion, generated modules and extern-prelude resolution are not verified.");
   if (relations.some((edge) => edge.context?.length || edge.scope && edge.scope !== "module")) limitations.push("Some dependency observations are conditional, optional, type-only or local-scope; they are not unconditional runtime dependencies.");
+  limitations.push(...unique(selected.flatMap((slice) => slice.evidenceStrength?.limitations ?? [])).slice(0, 6));
   return {
     schemaVersion: 1,
     id: bundleId(input.atlas.repository, input.atlas.revision, input.concern, input.discriminator),
@@ -77,6 +89,7 @@ function createBundle(input: {
     evidenceSliceIds: selected.map((slice) => slice.id),
     relatedPaths: unique([...selected.map((slice) => slice.path), ...relations.flatMap((relation) => [relation.from, relation.to])]).sort(),
     relations,
+    evidenceStrength: summarizeBundleStrength(selected),
     limitations,
   };
 }
@@ -170,6 +183,7 @@ export function renderEvidenceBundles(bundles: EvidenceBundle[], slices: Evidenc
       `Question: ${bundle.question}`,
       `Epistemic ceiling: ${bundle.epistemicCeiling}`,
       `Evidence kinds: ${bundle.evidenceKinds.join(", ")}`,
+      `Evidence strength: ${bundle.evidenceStrength ? `${bundle.evidenceStrength.weakest}..${bundle.evidenceStrength.strongest}` : "legacy/unknown"}`,
       `Slices: ${bundle.evidenceSliceIds.map((id) => `${id}:${sliceById.get(id)?.path ?? "unknown"}`).join(", ")}`,
       `Relations: ${bundle.relations.map((relation) => `${relation.from} -> ${relation.to} [${relation.kind}]`).join("; ") || "none"}`,
       "",

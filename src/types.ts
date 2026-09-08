@@ -1,4 +1,5 @@
 import type { SourceAnalysis } from "./source-analysis.ts";
+import type { AtlasSourceRoute, SliceSourceRoute } from "./source-routing.ts";
 
 export type TaskSpec = {
   task: string;
@@ -89,6 +90,34 @@ export type AtlasSourceRef = {
   sourceUrl: string;
 };
 
+export type EvidenceStrength = "missing" | "textual" | "syntactic" | "resolved" | "corroborated";
+
+export type EvidenceStrengthRecord = {
+  level: EvidenceStrength;
+  signals: string[];
+  limitations: string[];
+};
+
+export type AnalysisQualityReport = {
+  schemaVersion: 1;
+  /** Observability of the bounded evidence, never a score for design merit. */
+  score: number;
+  calibrationStatus: "observational-only";
+  highestStrength: EvidenceStrength;
+  counts: Record<EvidenceStrength, number>;
+  signals: Array<{
+    name: string;
+    points: number;
+    sources: AtlasSourceRef[];
+  }>;
+  files: Array<AtlasSourceRef & EvidenceStrengthRecord & {
+    modalities: EvidenceKind[];
+    selectedAnalyzer?: string;
+    analysisStatus?: SourceAnalysis["status"] | "not-applicable" | "not-produced";
+  }>;
+  limitations: string[];
+};
+
 export type AtlasCoverage = {
   score: number;
   sufficient: boolean;
@@ -119,6 +148,9 @@ export type RepositoryDesignAtlas = {
     developmentDependencies: string[];
     scripts: string[];
     workspacePatterns: string[];
+    edition?: string;
+    features?: string[];
+    targets?: Array<{ name: string; kind: string; path?: string }>;
   }>;
   architectureDocuments: Array<AtlasSourceRef & {
     kind: "overview" | "architecture" | "decision" | "security";
@@ -138,7 +170,7 @@ export type RepositoryDesignAtlas = {
     scope?: string;
     context?: string[];
     aliases?: Array<{ name: string; asName: string | null }>;
-    resolution?: "static-candidate";
+    resolution?: "static-candidate" | "rust-module-candidate";
   }>;
   unresolvedImports?: Array<AtlasSourceRef & { module: string; line: number; reason: string; scope: string; context: string[] }>;
   fixtureRelations?: Array<{ testPath: string; testSymbol: string; fixturePath?: string; fixtureSymbol?: string; request: string; status: "candidate" | "unresolved"; reason: string }>;
@@ -148,6 +180,8 @@ export type RepositoryDesignAtlas = {
   automationFiles: AtlasSourceRef[];
   inspectedFiles: AtlasSourceRef[];
   sourceAnalyses?: Array<AtlasSourceRef & SourceAnalysis>;
+  sourceRoutes?: Array<AtlasSourceRef & AtlasSourceRoute>;
+  analysisQuality?: AnalysisQualityReport;
   coverage: AtlasCoverage;
 };
 
@@ -170,6 +204,8 @@ export type RepositoryAssessment = {
   rejectionReasons: string[];
 };
 
+export type SliceStrategy = "line-window" | "typescript-ast" | "python-ast" | "rust-syntax" | (string & {});
+
 export type EvidenceSlice = {
   id: string;
   repository: string;
@@ -183,8 +219,14 @@ export type EvidenceSlice = {
   relevance: number;
   reason: string;
   content: string;
-  strategy?: "line-window" | "typescript-ast" | "python-ast";
+  strategy?: SliceStrategy;
   symbols?: string[];
+  /** Semantic roles demonstrated inside this exact slice window. */
+  evidenceRoles?: Array<"implementation" | "test">;
+  /** Auditable path-based analyzer selection and the actual slicing outcome. */
+  sourceRoute?: SliceSourceRoute;
+  /** Strength of this exact evidence window, separate from repository design quality. */
+  evidenceStrength?: EvidenceStrengthRecord;
 };
 
 export type EpistemicStatus = "explicit" | "observed" | "inferred" | "unknown";
@@ -202,6 +244,11 @@ export type EvidenceBundle = {
   evidenceSliceIds: string[];
   relatedPaths: string[];
   relations: RepositoryDesignAtlas["relations"];
+  evidenceStrength?: {
+    strongest: EvidenceStrength;
+    weakest: EvidenceStrength;
+    signals: string[];
+  };
   limitations: string[];
 };
 
@@ -296,7 +343,7 @@ export type ReviewRequest = {
     dimensions: RepositoryAssessment["dimensions"];
     atlas: RepositoryDesignAtlas;
     bundles: EvidenceBundle[];
-    slices: Array<Pick<EvidenceSlice, "id" | "path" | "startLine" | "endLine" | "sourceUrl" | "reason" | "content">>;
+    slices: Array<Pick<EvidenceSlice, "id" | "path" | "startLine" | "endLine" | "sourceUrl" | "reason" | "content" | "strategy" | "symbols" | "evidenceRoles" | "sourceRoute" | "evidenceStrength">>;
   }>;
 };
 
