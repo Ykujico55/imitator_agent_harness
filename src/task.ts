@@ -3,26 +3,32 @@ import type { TaskIdentity, TaskSpec } from "./types.ts";
 import { normalizeSpecifiedRepositories } from "./reference.ts";
 import { normalizeDomainSpec } from "./domain.ts";
 
-function normalizeText(value: string | undefined): string | undefined {
+function normalizeText(value: string | undefined, label: string, maximum: number): string | undefined {
+  if (value !== undefined && typeof value !== "string") throw new Error(`${label} must be a string`);
   const normalized = value?.trim().replace(/\s+/g, " ");
+  if (normalized && normalized.length > maximum) throw new Error(`${label} exceeds ${maximum} characters`);
   return normalized || undefined;
 }
 
-function normalizeList(values: string[] | undefined): string[] | undefined {
+function normalizeList(values: string[] | undefined, label: string, maximumItems: number, maximumCharacters: number): string[] | undefined {
   if (!values) return undefined;
-  const normalized = [...new Set(values.map(normalizeText).filter((value): value is string => Boolean(value)))].sort();
+  if (!Array.isArray(values) || values.length > maximumItems) throw new Error(`${label} must contain at most ${maximumItems} strings`);
+  const normalized = [...new Set(values.map((value) => normalizeText(value, label, maximumCharacters)).filter((value): value is string => Boolean(value)))].sort();
   return normalized.length ? normalized : undefined;
 }
 
 export function normalizeTaskSpec(task: TaskSpec): TaskSpec {
+  if (!task || typeof task !== "object" || Array.isArray(task)) throw new Error("task specification must be an object");
+  const taskText = normalizeText(task.task, "task", 20_000);
+  if (!taskText) throw new Error("task must not be empty");
   return {
-    task: normalizeText(task.task) ?? "",
+    task: taskText,
     ...(task.domain === undefined ? {} : { domain: normalizeDomainSpec(task.domain, task) }),
-    queries: normalizeList(task.queries),
-    language: normalizeText(task.language)?.toLowerCase(),
-    ecosystem: normalizeText(task.ecosystem)?.toLowerCase(),
-    mustHave: normalizeList(task.mustHave),
-    avoid: normalizeList(task.avoid),
+    queries: normalizeList(task.queries, "queries", 5, 500),
+    language: normalizeText(task.language, "language", 100)?.toLowerCase(),
+    ecosystem: normalizeText(task.ecosystem, "ecosystem", 100)?.toLowerCase(),
+    mustHave: normalizeList(task.mustHave, "mustHave", 20, 2_000),
+    avoid: normalizeList(task.avoid, "avoid", 20, 2_000),
     referenceRepositories: normalizeSpecifiedRepositories(task.referenceRepositories),
   };
 }

@@ -64,13 +64,13 @@ function dossier(taskFingerprint: string, referencePackFingerprint: string, blue
     claims: [{
       id: "claim_registry_boundary",
       statement: "The reference separates registration metadata from provider-specific execution behavior.",
-      status: "observed",
+      status: "inferred",
       confidence: 0.8,
       evidenceBundleIds: ["bundle-architecture"],
       evidenceSliceIds: ["design-evidence"],
       counterEvidenceSliceIds: [],
       blueprintObservationIds: [blueprintObservationId],
-      limitations: [],
+      limitations: ["The interface establishes a registration surface; lifecycle separation and failure cases are local derivations requiring acceptance tests."],
     }],
     principles: [{
       id: "principle_registry_boundary", title: "Registry and execution remain separate",
@@ -83,6 +83,7 @@ function dossier(taskFingerprint: string, referencePackFingerprint: string, blue
       fitsWhen: ["Multiple providers share the same lifecycle concepts."],
       failsWhen: ["A single fixed provider owns the complete process lifetime."],
       evidenceSliceIds: ["design-evidence"],
+      supportingClaimIds: ["claim_registry_boundary"],
     }],
     architecture: [{
       id: "architecture_registry", name: "Hook registry",
@@ -90,17 +91,20 @@ function dossier(taskFingerprint: string, referencePackFingerprint: string, blue
       collaborators: ["Hook executor", "Provider adapter"], invariants: ["Registration never executes a hook."],
       failureModes: ["Duplicate names are rejected before execution."], extensionPoints: ["Descriptor validation policy"],
       evidenceSliceIds: ["design-evidence"],
+      supportingClaimIds: ["claim_registry_boundary"],
     }],
     specifications: [{
       id: "spec_registration", subject: "Hook registration contract",
       preconditions: ["The hook name is non-empty."], postconditions: ["A valid descriptor is retrievable by name."],
       invariants: ["Stored descriptors remain provider-neutral."], errorSemantics: ["Duplicate hook names fail deterministically."],
       evidenceSliceIds: ["design-evidence"],
+      supportingClaimIds: ["claim_registry_boundary"],
     }],
     testConcepts: [{
       id: "test_registry_contract", behavior: "Registration and execution remain observably separate.", layer: "contract",
       oracle: "A registration call changes lookup state without invoking the hook.", setup: ["Use a hook spy that records invocations."],
       failureCases: ["Duplicate registration returns the documented failure."], evidenceSliceIds: ["design-evidence"],
+      supportingClaimIds: ["claim_registry_boundary"],
     }],
     negativeSpace: [{
       choice: "Avoid a universal provider abstraction with every upstream option.",
@@ -202,6 +206,154 @@ test("binds observed claims to approved blueprint observations and named strengt
   overconfident.claims[0]!.confidence = 0.8;
   result = evaluateDesignDossier(overconfident, fixture.gate, fixture.taskFingerprint);
   assert.ok(result.reasons.some((reason) => /textual blueprint ceiling 0.65/.test(reason)));
+});
+
+test("binds each concept to its own claims instead of laundering dossier-wide evidence", () => {
+  const fixture = referenceFixture();
+  const input = fixtureDossier(fixture);
+  input.principles[0]!.supportingClaimIds = [];
+  input.architecture[0]!.supportingClaimIds = ["claim_nonexistent"];
+  input.claims.push({
+    ...input.claims[0]!, id: "claim_missing_failure", status: "unknown", confidence: 0.1,
+    statement: "Failure recovery has not been established from the bounded registry interface.",
+    limitations: ["No upstream recovery branch or corresponding test has been read."],
+  });
+  input.specifications[0]!.supportingClaimIds = ["claim_missing_failure"];
+  const result = evaluateDesignDossier(parseDesignDossier(input), fixture.gate, fixture.taskFingerprint);
+  assert.equal(result.approved, false);
+  assert.ok(result.reasons.some((reason) => /principle_registry_boundary has no supporting claim IDs/.test(reason)));
+  assert.ok(result.reasons.some((reason) => /architecture_registry cites unknown supporting claim/.test(reason)));
+  assert.ok(result.reasons.some((reason) => /spec_registration depends on an unknown claim/.test(reason)));
+});
+
+test("rejects conflicting local decisions and adoption based on local inference", () => {
+  const fixture = referenceFixture();
+  const input = fixtureDossier(fixture);
+  input.localMappings.push({ ...input.localMappings[0]!, referenceConceptIds: ["principle_registry_boundary"], decision: "reject" });
+  input.localMappings[0]!.decision = "adopt";
+  const result = evaluateDesignDossier(input, fixture.gate, fixture.taskFingerprint);
+  assert.equal(result.approved, false);
+  assert.ok(result.reasons.some((reason) => /multiple local decisions/.test(reason)));
+  assert.ok(result.reasons.some((reason) => /inferred claims and must be adapted or rejected/.test(reason)));
+});
+
+test("observed designs require evidence for relationships, failures, contracts, and tests", () => {
+  const fixture = referenceFixture();
+  const input = fixtureDossier(fixture);
+  input.claims[0]!.status = "observed";
+  const result = evaluateDesignDossier(input, fixture.gate, fixture.taskFingerprint);
+  assert.equal(result.approved, false);
+  assert.ok(result.reasons.some((reason) => /architecture_registry has no relationship blueprint evidence/.test(reason)));
+  assert.ok(result.reasons.some((reason) => /spec_registration has no failure semantics blueprint evidence/.test(reason)));
+  assert.ok(result.reasons.some((reason) => /test_registry_contract has no test concept blueprint evidence/.test(reason)));
+  assert.ok(!result.reasons.some((reason) => /spec_registration has no contract\/invariant blueprint evidence/.test(reason)));
+  assert.ok(result.reasons.some((reason) => /spec_registration has no retained invariant-candidate evidence/.test(reason)));
+});
+
+test("keeps textual observations usable for bounded local principles without parser bonuses", () => {
+  const fixture = referenceFixture();
+  const input = fixtureDossier(fixture);
+  const textual = blueprintObservations(buildDesignDossierRequest(fixture.gate, fixture.taskFingerprint).semanticBlueprints)
+    .find((observation) => observation.section === "modules" && observation.evidenceStrength === "textual")!;
+  input.claims.push({
+    ...input.claims[0]!, id: "claim_textual_boundary", status: "observed", confidence: 0.65,
+    statement: "The bounded source index places the registration surface inside the source module.",
+    blueprintObservationIds: [textual.id], limitations: ["This path observation does not establish runtime responsibility."],
+  });
+  input.principles[0]!.supportingClaimIds = ["claim_textual_boundary"];
+  input.localMappings[0]!.referenceConceptIds = input.localMappings[0]!.referenceConceptIds.filter((id) => id !== "principle_registry_boundary");
+  input.localMappings.push({
+    ...input.localMappings[0]!, referenceConceptIds: ["principle_registry_boundary"], decision: "adopt",
+  });
+  const result = evaluateDesignDossier(input, fixture.gate, fixture.taskFingerprint);
+  assert.equal(result.approved, true, result.reasons.join("\n"));
+});
+
+test("uses the weakest cited observation ceiling and requires its complete evidence", () => {
+  const fixture = referenceFixture();
+  const input = fixtureDossier(fixture);
+  const textual = blueprintObservations(buildDesignDossierRequest(fixture.gate, fixture.taskFingerprint).semanticBlueprints)
+    .find((observation) => observation.section === "modules" && observation.evidenceStrength === "textual")!;
+  input.claims[0]!.blueprintObservationIds.push(textual.id);
+  let result = evaluateDesignDossier(input, fixture.gate, fixture.taskFingerprint);
+  assert.ok(result.reasons.some((reason) => /inferred confidence 0.8 exceeds the textual blueprint ceiling 0.65/.test(reason)));
+  input.claims[0]!.confidence = 0.65;
+  result = evaluateDesignDossier(input, fixture.gate, fixture.taskFingerprint);
+  assert.equal(result.approved, true, result.reasons.join("\n"));
+
+  const second: EvidenceSlice = { ...fixture.gate.approvedPack.slices[0]!, id: "design-second", path: "src/executor.ts", symbols: ["Executor"] };
+  fixture.gate.approvedPack.slices.push(second);
+  fixture.gate.approvedPack.bundles[0]!.evidenceSliceIds.push(second.id);
+  result = evaluateDesignDossier(input, fixture.gate, fixture.taskFingerprint);
+  assert.equal(result.approved, false);
+  assert.ok(result.reasons.some((reason) => /must cite all supporting slices of blueprint observation/.test(reason)));
+
+  input.claims[0]!.blueprintObservationIds = [fixture.blueprintObservationId];
+  input.claims[0]!.evidenceSliceIds.push(second.id);
+  result = evaluateDesignDossier(input, fixture.gate, fixture.taskFingerprint);
+  assert.ok(result.reasons.some((reason) => /positive evidence has no cited blueprint observation: design-second/.test(reason)));
+  assert.ok(result.reasons.some((reason) => /omits a supporting claim's evidence: design-second/.test(reason)));
+});
+
+test("negative-space observations cannot support positive implementation concepts", () => {
+  const fixture = referenceFixture();
+  const slice = fixture.gate.approvedPack.slices[0]!;
+  fixture.gate.approvedPack.atlases[0]!.unresolvedImports = [{
+    path: slice.path, sourceUrl: slice.sourceUrl, module: "optional_executor", line: 1,
+    reason: "Optional executor target remains unresolved.", scope: "module", context: [],
+  }];
+  const negative = blueprintObservations(buildDesignDossierRequest(fixture.gate, fixture.taskFingerprint).semanticBlueprints)
+    .find((observation) => observation.section === "negativeSpace")!;
+  const input = fixtureDossier(fixture);
+  input.claims[0]!.blueprintObservationIds = [negative.id];
+  input.claims[0]!.confidence = 0.6;
+  const result = evaluateDesignDossier(input, fixture.gate, fixture.taskFingerprint);
+  assert.equal(result.approved, false);
+  assert.ok(result.reasons.some((reason) => /only missing or negative-space observations; reject the concept/.test(reason)));
+});
+
+test("records an evidence-free unknown as rejection and excludes its instructions from coding context", () => {
+  const fixture = referenceFixture();
+  const input = fixtureDossier(fixture);
+  input.claims.push({
+    id: "claim_missing_recovery", statement: "Recovery semantics remain unknown after bounded source acquisition.", status: "unknown", confidence: 0,
+    evidenceBundleIds: [], evidenceSliceIds: [], counterEvidenceSliceIds: [], blueprintObservationIds: [],
+    limitations: ["No recovery implementation or corresponding test was available within the evidence budget."],
+  });
+  input.architecture.push({
+    ...input.architecture[0]!, id: "architecture_unverified_recovery", name: "Unverified recovery candidate",
+    responsibility: "UNVERIFIED_RECOVERY_IMPLEMENTATION must never reach coding instructions.",
+    supportingClaimIds: ["claim_missing_recovery"], evidenceSliceIds: [],
+  });
+  input.localMappings.push({
+    localConcern: "Defer the proposed recovery subsystem until source evidence is available.",
+    referenceConceptIds: ["architecture_unverified_recovery"], decision: "reject",
+    rationale: "Neither recovery behavior nor a source test oracle was established.",
+    adaptations: ["REJECTED_ADAPTATION must not be implemented."], targetPaths: ["REJECTED_TARGET.ts"],
+    acceptanceTests: ["REJECTED_ACCEPTANCE must not be treated as an implementation requirement."],
+  });
+  const result = evaluateDesignDossier(input, fixture.gate, fixture.taskFingerprint);
+  assert.equal(result.approved, true, result.reasons.join("\n"));
+  const context = renderDesignAgentContext(result);
+  assert.match(context, /Recovery semantics remain unknown/);
+  assert.match(context, /Rejected transfers/);
+  assert.doesNotMatch(context, /UNVERIFIED_RECOVERY_IMPLEMENTATION|REJECTED_ADAPTATION|REJECTED_TARGET|REJECTED_ACCEPTANCE/);
+  assert.doesNotMatch(renderAdaptationBrief(input), /REJECTED_ADAPTATION|REJECTED_TARGET|REJECTED_ACCEPTANCE/);
+  assert.match(renderDesignDossier(input, fixture.gate), /UNVERIFIED_RECOVERY_IMPLEMENTATION/);
+});
+
+test("refuses coding context from failed or modified dossiers and renders an auditable lineage", () => {
+  const fixture = referenceFixture();
+  const input = fixtureDossier(fixture);
+  const result = evaluateDesignDossier(input, fixture.gate, fixture.taskFingerprint);
+  const markdown = renderDesignDossier(input, fixture.gate);
+  assert.match(markdown, /Observation-to-decision trace/);
+  assert.ok(markdown.includes(fixture.blueprintObservationId));
+  assert.match(markdown, /principle_registry_boundary → adapt/);
+  assert.match(markdown, /claim_registry_boundary \[inferred\]/);
+  assert.throws(() => renderDesignAgentContext({ ...result, approved: false }), /rejected or changed/);
+  result.dossier.principles[0]!.mechanisms.push("An unreviewed mechanism added after validation.");
+  assert.throws(() => renderDesignAgentContext(result), /rejected or changed/);
 });
 
 test("renders design intent and local contracts without embedding remote source content", () => {

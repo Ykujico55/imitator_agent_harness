@@ -99,11 +99,11 @@ export function parseDesignJudgeDecision(output: string): { approve: boolean; ra
 export function parseEvalSuite(value: unknown): EvalSuite {
   const root = record(value, "eval suite");
   if (root.schemaVersion !== 1) throw new Error("eval suite schemaVersion must be 1");
-  if (typeof root.name !== "string" || !root.name.trim()) throw new Error("eval suite name is required");
+  if (typeof root.name !== "string" || !/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(root.name)) throw new Error("eval suite name must be a path-safe identifier");
   if (!Number.isInteger(root.repetitions) || (root.repetitions as number) < 1 || (root.repetitions as number) > 20) {
     throw new Error("eval suite repetitions must be an integer from 1 to 20");
   }
-  if (!Array.isArray(root.tasks) || root.tasks.length === 0) throw new Error("eval suite requires at least one task");
+  if (!Array.isArray(root.tasks) || root.tasks.length === 0 || root.tasks.length > 50) throw new Error("eval suite requires 1-50 tasks");
   const ids = new Set<string>();
   const tasks = root.tasks.map((raw, index): EvalTask => {
     const task = record(raw, `tasks[${index}]`);
@@ -112,17 +112,23 @@ export function parseEvalSuite(value: unknown): EvalSuite {
     if (ids.has(task.id)) throw new Error(`duplicate eval task id: ${task.id}`);
     ids.add(task.id);
     if (typeof task.fixture !== "string" || !task.fixture.trim()) throw new Error(`tasks[${index}].fixture is required`);
-    if (typeof task.prompt !== "string" || !task.prompt.trim()) throw new Error(`tasks[${index}].prompt is required`);
-    if (typeof verify.command !== "string" || !verify.command.trim()) throw new Error(`tasks[${index}].verify.command is required`);
-    if (verify.args !== undefined && (!Array.isArray(verify.args) || verify.args.some((arg) => typeof arg !== "string"))) {
-      throw new Error(`tasks[${index}].verify.args must be a string array`);
+    const fixture = task.fixture.trim().replace(/\\/g, "/").replace(/^\.\/+/, "");
+    if (fixture.length > 500 || fixture.startsWith("/") || /^[a-z]:\//i.test(fixture)
+      || fixture.split("/").some((part) => !part || part === "." || part === "..")) {
+      throw new Error(`tasks[${index}].fixture must stay within the suite directory`);
     }
-    if (task.timeoutMs !== undefined && (!Number.isInteger(task.timeoutMs) || (task.timeoutMs as number) < 1_000)) {
-      throw new Error(`tasks[${index}].timeoutMs must be at least 1000`);
+    if (typeof task.prompt !== "string" || !task.prompt.trim() || task.prompt.length > 20_000) throw new Error(`tasks[${index}].prompt must contain 1-20000 characters`);
+    if (typeof verify.command !== "string" || !verify.command.trim() || verify.command.length > 500) throw new Error(`tasks[${index}].verify.command is required and bounded`);
+    if (verify.args !== undefined && (!Array.isArray(verify.args) || verify.args.length > 100
+      || verify.args.some((arg) => typeof arg !== "string" || arg.length > 2_000))) {
+      throw new Error(`tasks[${index}].verify.args must contain at most 100 bounded strings`);
+    }
+    if (task.timeoutMs !== undefined && (!Number.isInteger(task.timeoutMs) || (task.timeoutMs as number) < 1_000 || (task.timeoutMs as number) > 3_600_000)) {
+      throw new Error(`tasks[${index}].timeoutMs must be from 1000 to 3600000`);
     }
     return {
       id: task.id,
-      fixture: task.fixture,
+      fixture,
       prompt: task.prompt,
       verify: { command: verify.command, args: verify.args as string[] | undefined },
       timeoutMs: task.timeoutMs as number | undefined,
@@ -134,6 +140,7 @@ export function parseEvalSuite(value: unknown): EvalSuite {
 export function buildEvalPlan(suite: EvalSuite, variants: EvalVariant[] = ["baseline", "imitator"]): EvalRunSpec[] {
   const uniqueVariants = [...new Set(variants)];
   if (!uniqueVariants.length) throw new Error("At least one eval variant is required");
+  if (uniqueVariants.some((variant) => variant !== "baseline" && variant !== "imitator")) throw new Error("Eval variants must be baseline or imitator");
   return suite.tasks.flatMap((task) => Array.from({ length: suite.repetitions }, (_, index) => index + 1)
     .flatMap((repetition) => uniqueVariants.map((variant) => ({
       id: `${task.id}-${variant}-r${repetition}`,

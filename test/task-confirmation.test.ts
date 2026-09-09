@@ -25,6 +25,11 @@ function fixture(): { pack: ReferencePack; submission: ReviewSubmission } {
     reason: "registry boundary",
     content: "export interface HookRegistry {}",
   };
+  const related: EvidenceSlice = {
+    ...slice, id: "registry-test-evidence", path: "test/registry.test.ts", startLine: 1, endLine: 4,
+    sourceUrl: `${repository.htmlUrl}/blob/${repository.resolvedRevision}/test/registry.test.ts#L1-L4`,
+    reason: "registry contract test", content: "test('registration', () => assert.ok(registry));", evidenceRoles: ["test"],
+  };
   const pack: ReferencePack = {
     schemaVersion: 4,
     generatedAt: "2026-09-01T00:00:00.000Z",
@@ -32,8 +37,8 @@ function fixture(): { pack: ReferencePack; submission: ReviewSubmission } {
     queries: ["coding agent hook registry"],
     assessments: [assessment],
     atlases: [matureAtlas(repository)],
-    slices: [slice],
-    bundles: [matureBundle(repository, [slice.id])],
+    slices: [slice, related],
+    bundles: [matureBundle(repository, [slice.id, related.id])],
     practices: [],
   };
   const submission: ReviewSubmission = {
@@ -72,19 +77,31 @@ test("independent confirmation binds task, pack, review, identity, and repositor
   const repository = submission.decisions[0]!.repository;
   const confirmation = buildReviewConfirmation(pack, task.fingerprint, submission, "human-reviewer", "human", [repository], "2026-09-02T00:00:00.000Z");
   assert.equal(confirmation.reviewFingerprint, fingerprintReviewSubmission(submission));
-  const final = applyReviewConfirmation(pack, task.fingerprint, submission, provisional, confirmation);
+  const final = applyReviewConfirmation(pack, task.fingerprint, submission, provisional, confirmation, defaultConfig);
   assert.equal(final.approvedPack.assessments.length, 1);
-  assert.equal(final.approvedPack.slices.length, 1);
+  assert.deepEqual(final.approvedPack.slices.map((slice) => slice.id), ["registry-evidence", "registry-test-evidence"]);
+  assert.deepEqual(final.approvedPack.bundles[0]!.evidenceSliceIds, ["registry-evidence", "registry-test-evidence"]);
+  assert.equal(final.approvedPack.atlases.length, 1);
   assert.throws(
-    () => applyReviewConfirmation(pack, task.fingerprint, submission, provisional, { ...confirmation, confirmer: submission.reviewer }),
+    () => applyReviewConfirmation(pack, task.fingerprint, submission, { ...provisional, results: provisional.results.map((result) => ({ ...result, approved: false })) }, confirmation, defaultConfig),
+    /modified or stale provisional gate/,
+  );
+  const modifiedEvidence = structuredClone(provisional);
+  modifiedEvidence.approvedPack.slices[0]!.content = "content modified after deterministic review";
+  assert.throws(
+    () => applyReviewConfirmation(pack, task.fingerprint, submission, modifiedEvidence, confirmation, defaultConfig),
+    /modified or stale provisional gate/,
+  );
+  assert.throws(
+    () => applyReviewConfirmation(pack, task.fingerprint, submission, provisional, { ...confirmation, confirmer: submission.reviewer }, defaultConfig),
     /different human or agent identity/,
   );
   assert.throws(
-    () => applyReviewConfirmation(pack, "other-task", submission, provisional, confirmation),
+    () => applyReviewConfirmation(pack, "other-task", submission, provisional, confirmation, defaultConfig),
     /different task/,
   );
   assert.throws(
-    () => applyReviewConfirmation(pack, task.fingerprint, { ...submission, reviewer: "modified" }, provisional, confirmation),
+    () => applyReviewConfirmation(pack, task.fingerprint, { ...submission, reviewer: "modified" }, provisional, confirmation, defaultConfig),
     /different review submission/,
   );
 });

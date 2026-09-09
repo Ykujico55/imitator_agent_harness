@@ -31,6 +31,7 @@ export type PersistedPiPayload = {
   };
   readEvidenceIds: string[];
   readBundleIds: string[];
+  readBlueprintObservationIds?: string[];
   submission?: ReviewSubmission;
   provisionalGate?: GateResult;
   confirmation?: ReviewConfirmation;

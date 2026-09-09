@@ -245,6 +245,9 @@ test("rejects modified packs, forged evidence IDs, and malformed structured outp
   const wrongPack = structuredClone(pack);
   wrongPack.generatedAt = "2026-09-02T00:00:00.000Z";
   assert.throws(() => applyReviewGate(wrongPack, approvedSubmission(pack), defaultConfig), /different or modified/);
+  const changedEvidence = structuredClone(pack);
+  changedEvidence.slices[0]!.content = "modified content under the same stable evidence ID";
+  assert.notEqual(fingerprintReferencePack(changedEvidence), fingerprintReferencePack(pack));
   const changedSelection = structuredClone(pack);
   changedSelection.selection = {
     schemaVersion: 1,

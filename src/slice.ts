@@ -8,6 +8,7 @@ import { isCodeFile, isImplementationPath, isTestPath, isTestSupportPath, isPyth
 import { hasSourceEvidence, hasTestEvidence } from "./coverage-evidence.ts";
 import type { SourceRouteDecision, SourceRouteResolver } from "./source-routing.ts";
 import type { SourceAnalysis, SourceSymbol } from "./source-analysis.ts";
+import { refineEvidenceSlices, semanticRoles } from "./evidence-refinement.ts";
 
 export type SliceWindow = {
   start: number;
@@ -123,66 +124,12 @@ export function rankPaths(tree: TreeEntry[], terms: string[], preferredPaths = n
     .sort((a, b) => b.score - a.score || a.entry.path.localeCompare(b.entry.path));
 }
 
-function evidenceBucket(path: string): string {
-  if (DESIGN_PATH.test(path)) return "design";
-  if (isTestPath(path)) return "test";
-  if (/(^|\/)(examples?|samples?)(\/|$)/i.test(path)) return "example";
-  if (README_PATH.test(path)) return "readme";
-  if (isImplementationPath(path)) return "source";
-  return "other";
-}
-
-function pathFamily(path: string): string {
-  return path.toLowerCase()
-    .replace(/([._-])(zh(?:-cn)?|en|i18n)(?=\.)/g, "")
-    .replace(/([_-])zh(?=\.)/g, "")
-    .replace(/\.(mdx?|ya?ml|json)$/, "");
-}
-
 function evidenceModality(path: string): "documentation" | "manifest" | "implementation" | "test" | "test-support" {
   if (isTestSupportPath(path)) return "test-support";
   if (isTestPath(path)) return "test";
   if (MANIFEST_PATH.test(path)) return "manifest";
   if (DESIGN_PATH.test(path) || README_PATH.test(path)) return "documentation";
   return "implementation";
-}
-
-function diversifyPaths(
-  ranked: ReturnType<typeof rankPaths>,
-  limit: number,
-): ReturnType<typeof rankPaths> {
-  const caps: Record<string, number> = {
-    design: Math.max(2, Math.ceil(limit * 0.2)),
-    test: Math.max(2, Math.ceil(limit * 0.25)),
-    example: Math.max(1, Math.ceil(limit * 0.15)),
-    readme: 1,
-    source: Math.max(2, Math.ceil(limit * 0.45)),
-    other: Math.max(1, Math.ceil(limit * 0.1)),
-  };
-  const counts: Record<string, number> = {};
-  const families = new Set<string>();
-  const selected: ReturnType<typeof rankPaths> = [];
-  const add = (candidate: ReturnType<typeof rankPaths>[number]): boolean => {
-    const bucket = evidenceBucket(candidate.entry.path);
-    const family = pathFamily(candidate.entry.path);
-    if (families.has(family) || (counts[bucket] ?? 0) >= (caps[bucket] ?? 1)) return false;
-    families.add(family);
-    counts[bucket] = (counts[bucket] ?? 0) + 1;
-    selected.push(candidate);
-    return true;
-  };
-  if (ranked[0]) add(ranked[0]);
-  for (const modality of ["documentation", "manifest", "test", "implementation"] as const) {
-    if (selected.length >= limit) break;
-    if (selected.some((candidate) => evidenceModality(candidate.entry.path) === modality)) continue;
-    const diverse = ranked.find((candidate) => evidenceModality(candidate.entry.path) === modality && !families.has(pathFamily(candidate.entry.path)));
-    if (diverse) add(diverse);
-  }
-  for (const candidate of ranked) {
-    add(candidate);
-    if (selected.length >= limit) break;
-  }
-  return selected;
 }
 
 export function selectLineWindow(content: string, terms: string[], maxLines: number): SliceWindow {
@@ -215,13 +162,16 @@ export async function collectSlices(
   const terms = taskTerms(task);
   const slices: EvidenceSlice[] = [];
   let characters = 0;
-  for (const assessment of assessments.filter((item) => item.accepted).slice(0, learningRepositoryLimit(config.slicing.maxRepositories))) {
+  const accepted = assessments.filter((item) => item.accepted).slice(0, learningRepositoryLimit(config.slicing.maxRepositories));
+  for (const [repositoryIndex, assessment] of accepted.entries()) {
     const repo = assessment.repository;
     const atlas = atlases.find((item) => item.repository === repo.fullName);
+    const candidateSlices: EvidenceSlice[] = [];
     const preferredPaths = new Set([
       ...(atlas?.entryPoints.map((item) => item.path) ?? []),
       ...(atlas?.manifests.map((item) => item.path) ?? []),
       ...(atlas?.architectureDocuments.map((item) => item.path) ?? []),
+      ...(atlas?.inspectedFiles.map((item) => item.path) ?? []),
       ...(atlas?.coverage.signals.filter((signal) => signal.name === "source-evidence" || signal.name === "test-evidence").flatMap((signal) => signal.sources.map((item) => item.path)) ?? []),
     ]);
     const inspectedAnalyses = new Map(atlas?.sourceAnalyses?.map((item) => [item.path, item]) ?? []);
@@ -230,9 +180,23 @@ export async function collectSlices(
       const analysis = inspectedAnalyses.get(candidate.entry.path);
       return !analysis || hasSourceEvidence(candidate.entry.path, "inspected", analysis);
     }).sort((a, b) => Number(isPythonPackageMarker(a.entry.path)) - Number(isPythonPackageMarker(b.entry.path)) || b.score - a.score || a.entry.path.localeCompare(b.entry.path));
-    const ranked = diversifyPaths(candidates, config.slicing.maxFilesPerRepository);
-    for (const candidate of ranked) {
-      if (slices.length >= config.slicing.maxSlices || characters >= config.slicing.maxTotalCharacters) return slices;
+    const pending = [...candidates];
+    const attempted = new Set<string>();
+    const modalities = new Set<string>();
+    const representedRoles = new Set<string>();
+    // Recompute deficits after each read. Failed or placeholder evidence never
+    // consumes a modality slot; file count bounds attempts, not desired slices.
+    while (pending.length && attempted.size < config.slicing.maxFilesPerRepository) {
+      const candidate = pending.sort((a, b) => {
+        const gain = (path: string): number => {
+          const analysis = inspectedAnalyses.get(path);
+          const roles = analysis?.status === "parsed" ? [...new Set(analysis.symbols.flatMap((symbol) => semanticRoles(symbol, analysis)))] : [];
+          return (modalities.has(evidenceModality(path)) ? 0 : 1000) + roles.filter((role) => !representedRoles.has(role)).length * 200
+            + (atlas?.relations.some((edge) => edge.from === path || edge.to === path) && !representedRoles.has("relationship") ? 80 : 0);
+        };
+        return gain(b.entry.path) - gain(a.entry.path) || b.score - a.score || a.entry.path.localeCompare(b.entry.path);
+      }).shift()!;
+      attempted.add(candidate.entry.path);
       try {
         const cacheKey = repositoryContentKey(repo.fullName, repo.resolvedRevision, candidate.entry.path);
         const text = contentCache.get(cacheKey) ?? await client.readTextFile(repo.fullName, candidate.entry.path, repo.resolvedRevision);
@@ -262,32 +226,60 @@ export async function collectSlices(
         } catch {
           // Parser errors must degrade to the deterministic dependency-free window.
         }
-        const primary = semanticWindow ?? selectLineWindow(text, terms, config.slicing.maxLinesPerSlice);
         const analysis = inspectedAnalyses.get(candidate.entry.path);
-        const windows: SliceWindow[] = [
-          primary,
-          ...selectSupplementalSemanticWindows(analysis, text, primary, config.slicing.maxLinesPerSlice),
-        ];
+        const lines = text.replace(/\r\n/g, "\n").split("\n");
+        const primary = semanticWindow ?? selectLineWindow(text, terms, config.slicing.maxLinesPerSlice);
+        const windows: SliceWindow[] = [primary];
+        if (analysis?.status === "parsed") {
+          const strategy = analysis.language === "python" ? "python-ast" : analysis.language === "rust" ? "rust-syntax" : analysis.language === "typescript" ? "typescript-ast" : "line-window";
+          if (strategy !== "line-window") for (const symbol of analysis.symbols) {
+            if (symbol.endLine - symbol.startLine + 1 > config.slicing.maxLinesPerSlice || symbol.kind === "module"
+              || symbol.role === "test" && symbol.hasBody === false) continue;
+            windows.push({ start: symbol.startLine, end: symbol.endLine,
+              content: lines.slice(symbol.startLine - 1, symbol.endLine).join("\n"),
+              relevance: semanticRoles(symbol, analysis).length * 5, strategy, symbols: [symbol.name] });
+          }
+          // Import anchors may sit outside every declaration. Keep bounded text
+          // candidates for them; a one-line read never claims a semantic unit.
+          for (const item of analysis.imports) windows.push({ start: item.line, end: item.line,
+            content: lines[item.line - 1] ?? "", relevance: 2, strategy: "line-window" });
+        }
+        for (const relation of atlas?.relations.filter((edge) => edge.from === candidate.entry.path) ?? []) {
+          const anchor = /#L(\d+)(?:-L(\d+))?$/.exec(relation.evidence.sourceUrl);
+          if (anchor) {
+            const start = Number(anchor[1]); const end = Number(anchor[2] ?? anchor[1]);
+            windows.push({ start, end, content: lines.slice(start - 1, end).join("\n"), relevance: 2, strategy: "line-window" });
+          }
+        }
+        const seenWindows = new Set<string>();
         for (const window of windows) {
-          if (slices.length >= config.slicing.maxSlices) return slices;
-          const remaining = config.slicing.maxTotalCharacters - characters;
-          if (remaining < 200) return slices;
-          if (window.strategy !== "line-window" && window.content.length > remaining) continue;
-          const content = window.content.slice(0, remaining);
-          const windowSymbols = analysis?.symbols.filter((symbol) => symbol.startLine >= window.start && symbol.endLine <= window.end) ?? [];
+          if (!Number.isInteger(window.start) || !Number.isInteger(window.end) || window.start < 1 || window.end > lines.length
+            || window.end < window.start || window.end - window.start + 1 > config.slicing.maxLinesPerSlice) continue;
+          const content = lines.slice(window.start - 1, window.end).join("\n");
+          if (content !== window.content.replace(/\r\n/g, "\n") || !content.trim()) continue;
+          const rangeKey = `${window.start}:${window.end}`;
+          if (seenWindows.has(rangeKey)) continue;
+          seenWindows.add(rangeKey);
+          const windowSymbols = analysis?.status === "parsed" ? analysis.symbols.filter((symbol) => symbol.startLine >= window.start && symbol.endLine <= window.end) : [];
           if (/\.py$/i.test(candidate.entry.path) && isTestPath(candidate.entry.path)) {
             const windowAnalysis = analysis ? { ...analysis, symbols: windowSymbols } : undefined;
             if (window.strategy !== "python-ast" && !hasTestEvidence(candidate.entry.path, content, windowAnalysis)) continue;
           }
-          if (/\.rs$/i.test(candidate.entry.path) && analysis?.symbols.some((symbol) => symbol.role === "test") && window.strategy !== "rust-syntax") continue;
+          const importAnchor = analysis?.status === "parsed" && analysis.imports.some((item) => item.line >= window.start && item.line <= window.end);
+          if (/\.rs$/i.test(candidate.entry.path) && analysis?.symbols.some((symbol) => symbol.role === "test") && window.strategy !== "rust-syntax" && !importAnchor) continue;
           const evidenceRoles = analysis ? [...new Set(windowSymbols.flatMap((symbol) => symbol.role === "test" ? ["test" as const]
             : symbol.role === "implementation" && symbol.kind !== "module" ? ["implementation" as const] : []))] : undefined;
-          characters += content.length;
+          const roles = analysis?.status === "parsed" ? [...new Set(windowSymbols.flatMap((symbol) => semanticRoles(symbol, analysis)))] : [];
+          if (importAnchor) roles.push("relationship");
+          if (!windowSymbols.length && !importAnchor && analysis?.status === "parsed" && analysis.symbols.length) continue;
+          if (isTestPath(candidate.entry.path) && !hasTestEvidence(candidate.entry.path, content, analysis ? { ...analysis, symbols: windowSymbols } : undefined) && !importAnchor) continue;
+          modalities.add(evidenceModality(candidate.entry.path));
+          roles.forEach((role) => representedRoles.add(role));
         const id = createHash("sha256")
           .update(`${repo.fullName}\0${repo.resolvedRevision}\0${candidate.entry.path}\0${window.start}\0${window.end}`)
           .digest("hex")
           .slice(0, 16);
-          slices.push({
+          candidateSlices.push({
           id,
           repository: repo.fullName,
           repositoryUrl: repo.htmlUrl,
@@ -303,6 +295,7 @@ export async function collectSlices(
           strategy: window.strategy,
           symbols: window.symbols,
           evidenceRoles,
+          architectureRoles: [...new Set(roles)],
           ...(sourceRouteDecision ? { sourceRoute: {
             ...sourceRouteDecision,
             outcome: window.strategy === "line-window" ? "line-window-fallback" as const : "semantic-window" as const,
@@ -318,6 +311,17 @@ export async function collectSlices(
         });
       }
     }
+    const remainingRepositories = accepted.length - repositoryIndex;
+    const refined = refineEvidenceSlices(candidateSlices, atlas, terms, {
+      maxSlices: Math.floor((config.slicing.maxSlices - slices.length) / remainingRepositories),
+      maxCharacters: Math.floor((config.slicing.maxTotalCharacters - characters) / remainingRepositories),
+    });
+    if (atlas) {
+      refined.report.limitations.push(...failures.filter((failure) => failure.repository === repo.fullName).slice(0, 8).map((failure) => `Slice read incomplete ${failure.path}: ${failure.reason}`));
+      atlas.evidenceRefinement = refined.report;
+    }
+    slices.push(...refined.slices);
+    characters += refined.slices.reduce((sum, slice) => sum + slice.content.length, 0);
   }
   return slices;
 }

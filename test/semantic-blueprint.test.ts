@@ -78,6 +78,18 @@ test("every blueprint observation remains slice-bound and bundle-aware", () => {
   }
 });
 
+test("withholds declarations and relationships when the cited interval is incomplete", () => {
+  const input = fixture();
+  input.slices = input.slices.filter((slice) => slice.id !== "cache-source" && slice.id !== "cache-fixture");
+  input.bundles[0]!.evidenceSliceIds = input.slices.map((slice) => slice.id);
+  const blueprint = buildReferenceSemanticBlueprints([input.atlas], input.slices, input.bundles)[0]!;
+  assert.ok(!blueprint.sections.contracts.some((item) => item.symbols.includes("Cache")));
+  assert.ok(!blueprint.sections.dataModels.some((item) => item.symbols.includes("Cache")));
+  assert.ok(!blueprint.sections.failureSemantics.some((item) => item.symbols.includes("Cache")));
+  assert.equal(blueprint.sections.relationships.length, 0);
+  assert.match(blueprint.limitations.join(" "), /lacks target-file evidence|fully covered/i);
+});
+
 function repositoryRevision(atlas: RepositoryDesignAtlas): string {
   return `/blob/${atlas.revision}/`;
 }

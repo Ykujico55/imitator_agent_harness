@@ -17,6 +17,7 @@ import type {
   RepositoryReviewDecision,
   ReviewConfirmation,
   ReviewSubmission,
+  SemanticBlueprintSection,
   TaskIdentity,
   TaskSpec,
 } from "../../src/types.ts";
@@ -62,20 +63,32 @@ async function optionalConfigPath(cwd: string): Promise<string | undefined> {
 }
 
 function gateBindingShape(result: GateResult): string {
-  return JSON.stringify({
-    referencePackFingerprint: result.referencePackFingerprint,
-    approvedRepositories: result.results.filter((item) => item.approved).map((item) => item.repository).sort(),
-    approvedSlices: result.approvedPack.slices.map((slice) => slice.id).sort(),
-  });
+  const { generatedAt: _gateTime, approvedPack, ...gateFields } = result;
+  const { generatedAt: _packTime, ...packFields } = approvedPack;
+  return JSON.stringify({ ...gateFields, approvedPack: packFields });
 }
 
 function designBindingShape(result: DesignGateResult): string {
-  return JSON.stringify({
-    dossierFingerprint: result.dossierFingerprint,
-    approved: result.approved,
-    reasons: [...result.reasons].sort(),
-    evidenceSliceIds: [...result.evidenceSliceIds].sort(),
-  });
+  const { generatedAt: _generatedAt, ...fields } = result;
+  return JSON.stringify(fields);
+}
+
+function dossierEvidenceBindings(dossier: DesignDossier): { bundleIds: string[]; sliceIds: string[] } {
+  return {
+    bundleIds: [...new Set(dossier.claims.flatMap((claim) => claim.evidenceBundleIds))],
+    sliceIds: [...new Set([
+      ...dossier.claims.flatMap((claim) => [...claim.evidenceSliceIds, ...claim.counterEvidenceSliceIds]),
+      ...dossier.principles.flatMap((item) => item.evidenceSliceIds),
+      ...dossier.architecture.flatMap((item) => item.evidenceSliceIds),
+      ...dossier.specifications.flatMap((item) => item.evidenceSliceIds),
+      ...dossier.testConcepts.flatMap((item) => item.evidenceSliceIds),
+      ...dossier.negativeSpace.flatMap((item) => item.evidenceSliceIds),
+    ])],
+  };
+}
+
+function dossierBlueprintObservationIds(dossier: DesignDossier): string[] {
+  return [...new Set(dossier.claims.flatMap((claim) => claim.blueprintObservationIds))];
 }
 
 export const defaultPiHarnessRuntime: PiHarnessRuntime = {
@@ -96,7 +109,7 @@ export const defaultPiHarnessRuntime: PiHarnessRuntime = {
     return result;
   },
   async confirm(run, submission, provisional, confirmation) {
-    const result = applyReviewConfirmation(run.pack, run.taskIdentity.fingerprint, submission, provisional, confirmation);
+    const result = applyReviewConfirmation(run.pack, run.taskIdentity.fingerprint, submission, provisional, confirmation, run.config);
     const output = resolve(run.directory, "reference-approved");
     await writeGateResult(result, submission, output);
     await writeFile(resolve(output, "REVIEW_CONFIRMATION.json"), `${JSON.stringify(confirmation, null, 2)}\n`, "utf8");
@@ -132,6 +145,7 @@ export class PiHarnessController {
   #finalDesignGate?: DesignGateResult;
   #readEvidenceIds = new Set<string>();
   #readBundleIds = new Set<string>();
+  #readBlueprintObservationIds = new Set<string>();
   #cwd?: string;
   readonly runtime: PiHarnessRuntime;
   readonly maxEvidencePerRead: number;
@@ -160,6 +174,7 @@ export class PiHarnessController {
     this.#finalDesignGate = undefined;
     this.#readEvidenceIds.clear();
     this.#readBundleIds.clear();
+    this.#readBlueprintObservationIds.clear();
     if (cwd && this.stateStore) await this.stateStore.clear(cwd);
   }
 
@@ -173,8 +188,13 @@ export class PiHarnessController {
     const packFingerprint = fingerprintReferencePack(state.run.pack);
     const availableEvidence = new Set(state.run.pack.slices.map((slice) => slice.id));
     const availableBundles = new Set(state.run.pack.bundles.map((bundle) => bundle.id));
+    const availableBlueprintObservations = new Set(state.referenceGate
+      ? buildDesignDossierRequest(state.referenceGate, state.run.taskIdentity.fingerprint).semanticBlueprints
+        .flatMap((blueprint) => Object.values(blueprint.sections).flat().map((observation) => observation.id))
+      : []);
     const readEvidenceValid = state.readEvidenceIds.every((id) => availableEvidence.has(id));
     const readBundlesValid = state.readBundleIds.every((id) => availableBundles.has(id));
+    const readBlueprintsValid = (state.readBlueprintObservationIds ?? []).every((id) => availableBlueprintObservations.has(id));
     const structurallyValid = state.phase === "reviewing"
       || state.phase === "blocked"
       || (state.phase === "awaiting_confirmation"
@@ -212,11 +232,13 @@ export class PiHarnessController {
             state.submission!,
             provisional,
             state.confirmation!,
+            state.run.config,
           );
           bindingsValid &&= gateBindingShape(confirmed) === gateBindingShape(state.referenceGate!);
         }
       }
       if (state.phase === "awaiting_design_confirmation" || state.phase === "approved") {
+        bindingsValid &&= dossierBlueprintObservationIds(state.designDossier!).every((id) => (state.readBlueprintObservationIds ?? []).includes(id));
         bindingsValid &&= state.designDossier!.referencePackFingerprint === packFingerprint;
         bindingsValid &&= fingerprintDesignDossier(state.designDossier!) === state.provisionalDesignGate!.dossierFingerprint;
         const evaluated = evaluateDesignDossier(state.designDossier!, state.referenceGate!, state.run.taskIdentity.fingerprint);
@@ -229,7 +251,7 @@ export class PiHarnessController {
     } catch {
       bindingsValid = false;
     }
-    if (!sameTask || !readEvidenceValid || !readBundlesValid || !structurallyValid || !bindingsValid) {
+    if (!sameTask || !readEvidenceValid || !readBundlesValid || !readBlueprintsValid || !structurallyValid || !bindingsValid) {
       await this.reset(cwd);
       return false;
     }
@@ -245,6 +267,7 @@ export class PiHarnessController {
     this.#finalDesignGate = state.finalDesignGate;
     this.#readEvidenceIds = new Set(state.readEvidenceIds);
     this.#readBundleIds = new Set(state.readBundleIds);
+    this.#readBlueprintObservationIds = new Set(state.readBlueprintObservationIds ?? []);
     return true;
   }
 
@@ -259,6 +282,7 @@ export class PiHarnessController {
     bundles: number;
     readSlices: number;
     readBundles: number;
+    readBlueprintObservations: number;
     approvedRepositories: number;
     approvedSlices: number;
     designPrinciples: number;
@@ -277,6 +301,7 @@ export class PiHarnessController {
       bundles: this.#run?.pack.bundles.length ?? 0,
       readSlices: this.#readEvidenceIds.size,
       readBundles: this.#readBundleIds.size,
+      readBlueprintObservations: this.#readBlueprintObservationIds.size,
       approvedRepositories: this.#gate?.approvedPack.assessments.length ?? 0,
       approvedSlices: this.#gate?.approvedPack.slices.length ?? 0,
       designPrinciples: this.#designDossier?.principles.length ?? 0,
@@ -296,6 +321,7 @@ export class PiHarnessController {
       run: this.#run,
       readEvidenceIds: [...this.#readEvidenceIds].sort(),
       readBundleIds: [...this.#readBundleIds].sort(),
+      readBlueprintObservationIds: [...this.#readBlueprintObservationIds].sort(),
       submission: this.#submission,
       provisionalGate: this.#provisional,
       confirmation: this.#confirmation,
@@ -325,6 +351,8 @@ export class PiHarnessController {
       atlas: {
         coverage: ReferencePack["atlases"][number]["coverage"];
         analysisQuality: ReferencePack["atlases"][number]["analysisQuality"];
+        evidenceAcquisition: ReferencePack["atlases"][number]["evidenceAcquisition"];
+        evidenceRefinement: ReferencePack["atlases"][number]["evidenceRefinement"];
         modules: ReferencePack["atlases"][number]["modules"];
         entryPoints: string[];
         architectureDocuments: string[];
@@ -335,7 +363,7 @@ export class PiHarnessController {
         fixtureRelations: ReferencePack["atlases"][number]["fixtureRelations"];
         coverageBasis: ReferencePack["atlases"][number]["coverageBasis"];
       };
-      slices: Array<{ id: string; path: string; lines: string; reason: string; strategy?: ReferencePack["slices"][number]["strategy"]; evidenceRoles?: ReferencePack["slices"][number]["evidenceRoles"]; symbols?: string[]; sourceRoute?: ReferencePack["slices"][number]["sourceRoute"]; evidenceStrength?: ReferencePack["slices"][number]["evidenceStrength"] }>;
+      slices: Array<{ id: string; path: string; lines: string; reason: string; strategy?: ReferencePack["slices"][number]["strategy"]; evidenceRoles?: ReferencePack["slices"][number]["evidenceRoles"]; architectureRoles?: ReferencePack["slices"][number]["architectureRoles"]; symbols?: string[]; sourceRoute?: ReferencePack["slices"][number]["sourceRoute"]; evidenceStrength?: ReferencePack["slices"][number]["evidenceStrength"] }>;
       bundles: Array<{
         id: string;
         concern: ReferencePack["bundles"][number]["concern"];
@@ -362,6 +390,7 @@ export class PiHarnessController {
     this.#finalDesignGate = undefined;
     this.#readEvidenceIds.clear();
     this.#readBundleIds.clear();
+    this.#readBlueprintObservationIds.clear();
     try {
       if (this.stateStore) await this.stateStore.clear(cwd);
       const run = await this.runtime.prepare(input, cwd);
@@ -385,6 +414,8 @@ export class PiHarnessController {
           atlas: {
             coverage: candidate.atlas.coverage,
             analysisQuality: candidate.atlas.analysisQuality,
+            evidenceAcquisition: candidate.atlas.evidenceAcquisition,
+            evidenceRefinement: candidate.atlas.evidenceRefinement,
             modules: candidate.atlas.modules,
             entryPoints: candidate.atlas.entryPoints.map((item) => item.path),
             architectureDocuments: candidate.atlas.architectureDocuments.map((item) => item.path),
@@ -405,6 +436,7 @@ export class PiHarnessController {
             reason: slice.reason,
             strategy: slice.strategy,
             evidenceRoles: slice.evidenceRoles,
+            architectureRoles: slice.architectureRoles,
             symbols: slice.symbols,
             sourceRoute: slice.sourceRoute,
             evidenceStrength: slice.evidenceStrength,
@@ -468,21 +500,34 @@ export class PiHarnessController {
     return evidence;
   }
 
-  getSemanticBlueprints(repositories: string[] = []): ReturnType<typeof buildDesignDossierRequest>["semanticBlueprints"] {
+  async getSemanticBlueprints(
+    repositories: string[] = [],
+    sections: SemanticBlueprintSection[] = [],
+  ): Promise<ReturnType<typeof buildDesignDossierRequest>["semanticBlueprints"]> {
     if (!this.#run || !this.#gate) throw new Error("Semantic blueprints are available only after independent reference confirmation");
     if (this.#phase !== "distilling" && this.#phase !== "awaiting_design_confirmation") {
       throw new Error(`Semantic blueprints are not available while phase is ${this.#phase}`);
     }
     const available = buildDesignDossierRequest(this.#gate, this.#run.taskIdentity.fingerprint).semanticBlueprints;
     const requested = [...new Set(repositories)];
-    if (!requested.length) return available;
     if (requested.length > 2) throw new Error("At most 2 confirmed repository blueprints may be read at once");
     const byRepository = new Map(available.map((blueprint) => [blueprint.repository, blueprint]));
-    return requested.map((repository) => {
+    const selected = (requested.length ? requested : available.map((blueprint) => blueprint.repository)).map((repository) => {
       const blueprint = byRepository.get(repository);
       if (!blueprint) throw new Error(`Semantic blueprint repository is unknown or not approved: ${repository}`);
       return blueprint;
     });
+    const selectedSections = new Set(sections);
+    const visible = selected.map((blueprint) => selectedSections.size === 0 ? blueprint : {
+      ...blueprint,
+      sections: Object.fromEntries(Object.entries(blueprint.sections).map(([section, observations]) => [
+        section,
+        selectedSections.has(section as SemanticBlueprintSection) ? observations : [],
+      ])) as typeof blueprint.sections,
+    });
+    visible.flatMap((blueprint) => Object.values(blueprint.sections).flat()).forEach((observation) => this.#readBlueprintObservationIds.add(observation.id));
+    await this.#persist();
+    return visible;
   }
 
   async getEvidenceBundles(ids: string[]): Promise<Array<{
@@ -571,6 +616,16 @@ export class PiHarnessController {
     if (!this.#run || !this.#gate) throw new Error("No independently confirmed reference set is ready for design distillation");
     if (this.#phase !== "distilling") throw new Error(`Cannot submit a design dossier while phase is ${this.#phase}`);
     const dossier = parseDesignDossier(value);
+    const bindings = dossierEvidenceBindings(dossier);
+    for (const id of bindings.bundleIds) {
+      if (!this.#readBundleIds.has(id)) throw new Error(`Design Dossier cites an evidence bundle that was not inspected in this task: ${id}`);
+    }
+    for (const id of bindings.sliceIds) {
+      if (!this.#readEvidenceIds.has(id)) throw new Error(`Design Dossier cites evidence that was not inspected in this task: ${id}`);
+    }
+    for (const id of dossierBlueprintObservationIds(dossier)) {
+      if (!this.#readBlueprintObservationIds.has(id)) throw new Error(`Design Dossier cites a semantic blueprint observation that was not inspected in this task: ${id}`);
+    }
     const result = await this.runtime.evaluateDesign(this.#run, this.#gate, dossier);
     this.#designDossier = dossier;
     this.#provisionalDesignGate = result;

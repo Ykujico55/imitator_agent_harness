@@ -40,7 +40,7 @@ npx pi -e ./integrations/pi/index.ts
 6. 必要时再用 `imitator_get_evidence` 按 ID 读取最多 6 个切片；源码内容带明确的 `UNTRUSTED EVIDENCE` 边界。评审只能引用已经检查过的包以及属于这些包、且实际读取过的切片。
 7. Agent 用 `imitator_submit_review` 提交每个仓库的 adopt/adapt/reject、置信度、风险、范式、错配、风险说明、包 ID 和引用切片；通过后进入 `awaiting_confirmation`，仍不解锁。
 8. 人第一次执行 `/imitator-confirm`，核对任务指纹和 provisional 仓库；自动化 eval 则由第一个隔离 judge 确认。成功后只进入 `distilling`，编码仍锁定。
-9. Agent 先用 `imitator_get_semantic_blueprint` 按一个仓库、每次最多两个 section 读取已确认参考的有界模块、契约、关系、失败、测试、扩展点和负空间索引，再按 observation 中的 Bundle/Slice ID 验证必要证据。随后用 `imitator_submit_design_dossier` 提交认识论分级 claims、本地约束、质量属性、跨语言原则、架构职责/失败模式、规格、测试 oracle、适用边界、negative space 和逐项本地映射。每个非 unknown claim 必须同时绑定 Blueprint observation 与底层证据。
+9. Agent 先用 `imitator_get_semantic_blueprint` 按一个仓库、每次最多两个 section 读取已确认参考的有界模块、契约、关系、失败、测试、扩展点和负空间索引，再按 observation 中的 Bundle/Slice ID 验证必要证据。随后用 `imitator_submit_design_dossier` 提交认识论分级 claims、本地约束、质量属性、跨语言原则、架构职责/失败模式、规格、测试 oracle、适用边界、negative space 和逐项本地映射。每个非 unknown claim 必须同时绑定 Blueprint observation 与底层证据；控制器拒绝本任务没有通过对应工具实际读取的 Bundle、切片或 observation。
 10. 确定性 design gate 通过后进入 `awaiting_design_confirmation`，提案写入 `design-proposal/DESIGN_DOSSIER.md`。人检查该文件并第二次执行 `/imitator-confirm`；自动 eval 使用第二个隔离 judge。
 11. 只有两层 gate 均确认后才进入 `approved`。系统提示只携带本地化抽象设计契约，不含远程源码或证据 ID；原始证据工具也随即关闭。
 12. 新任务执行 `/imitator-reset`，重新锁定修改工具并清空持久状态。若直接启动新的 prepare，旧状态也会在远程工作前先被清除。

@@ -182,6 +182,25 @@ export type RepositoryDesignAtlas = {
   sourceAnalyses?: Array<AtlasSourceRef & SourceAnalysis>;
   sourceRoutes?: Array<AtlasSourceRef & AtlasSourceRoute>;
   analysisQuality?: AnalysisQualityReport;
+  evidenceAcquisition?: {
+    strategy: "semantic-role-deficit-v1";
+    requiredRoles: SemanticEvidenceRole[];
+    coveredRoles: SemanticEvidenceRole[];
+    missingRoles: SemanticEvidenceRole[];
+    stopReason: "satisfied" | "budget-exhausted" | "no-supported-candidates";
+    reads: Array<{ path: string; reasons: string[]; status: "read" | "failed" | "truncated" }>;
+    limitations: string[];
+  };
+  evidenceRefinement?: {
+    strategy: "semantic-role-cover-v1";
+    status: "covered" | "degraded";
+    requiredRoles: SemanticEvidenceRole[];
+    coveredRoles: SemanticEvidenceRole[];
+    missingRoles: SemanticEvidenceRole[];
+    selectedSliceIds: string[];
+    discarded: Array<{ path: string; startLine: number; endLine: number; reason: "duplicate" | "redundant" | "low-value" | "budget" }>;
+    limitations: string[];
+  };
   coverage: AtlasCoverage;
 };
 
@@ -206,6 +225,9 @@ export type RepositoryAssessment = {
 
 export type SliceStrategy = "line-window" | "typescript-ast" | "python-ast" | "rust-syntax" | (string & {});
 
+/** Evidence of static surfaces to inspect, never proof of runtime invariants. */
+export type SemanticEvidenceRole = "contract" | "invariant" | "failure" | "relationship" | "test";
+
 export type EvidenceSlice = {
   id: string;
   repository: string;
@@ -223,6 +245,7 @@ export type EvidenceSlice = {
   symbols?: string[];
   /** Semantic roles demonstrated inside this exact slice window. */
   evidenceRoles?: Array<"implementation" | "test">;
+  architectureRoles?: SemanticEvidenceRole[];
   /** Auditable path-based analyzer selection and the actual slicing outcome. */
   sourceRoute?: SliceSourceRoute;
   /** Strength of this exact evidence window, separate from repository design quality. */
@@ -392,7 +415,7 @@ export type ReviewRequest = {
     dimensions: RepositoryAssessment["dimensions"];
     atlas: RepositoryDesignAtlas;
     bundles: EvidenceBundle[];
-    slices: Array<Pick<EvidenceSlice, "id" | "path" | "startLine" | "endLine" | "sourceUrl" | "reason" | "content" | "strategy" | "symbols" | "evidenceRoles" | "sourceRoute" | "evidenceStrength">>;
+    slices: Array<Pick<EvidenceSlice, "id" | "path" | "startLine" | "endLine" | "sourceUrl" | "reason" | "content" | "strategy" | "symbols" | "evidenceRoles" | "architectureRoles" | "sourceRoute" | "evidenceStrength">>;
   }>;
 };
 
@@ -446,6 +469,7 @@ export type DesignClaim = {
 
 export type DesignPrinciple = {
   id: string;
+  supportingClaimIds: string[];
   title: string;
   problem: string;
   constraints: string[];
@@ -460,6 +484,7 @@ export type DesignPrinciple = {
 
 export type ArchitectureConcept = {
   id: string;
+  supportingClaimIds: string[];
   name: string;
   responsibility: string;
   collaborators: string[];
@@ -471,6 +496,7 @@ export type ArchitectureConcept = {
 
 export type SpecificationConcept = {
   id: string;
+  supportingClaimIds: string[];
   subject: string;
   preconditions: string[];
   postconditions: string[];
@@ -481,6 +507,7 @@ export type SpecificationConcept = {
 
 export type TestConcept = {
   id: string;
+  supportingClaimIds: string[];
   behavior: string;
   layer: TestLayer;
   oracle: string;
@@ -549,6 +576,7 @@ export type DesignDossierRequest = {
     strategy?: SliceStrategy;
     symbols?: string[];
     evidenceRoles?: EvidenceSlice["evidenceRoles"];
+    architectureRoles?: EvidenceSlice["architectureRoles"];
     sourceRoute?: SliceSourceRoute;
     evidenceStrength?: EvidenceStrengthRecord;
   }>;

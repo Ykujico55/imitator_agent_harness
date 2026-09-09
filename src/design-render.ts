@@ -1,4 +1,5 @@
 import type { DesignDossier, DesignGateResult, GateResult } from "./types.ts";
+import { fingerprintDesignDossier } from "./design.ts";
 
 function bullets(values: string[]): string[] {
   return values.length ? values.map((value) => `- ${value}`) : ["- None stated."];
@@ -32,11 +33,25 @@ export function renderDesignDossier(dossier: DesignDossier, referenceGate: GateR
     ...dossier.claims.flatMap((claim) => [
       `### ${claim.id}: ${claim.status} (${claim.confidence.toFixed(2)})`, "", claim.statement, "",
       `Bundles: ${claim.evidenceBundleIds.join(", ") || "none"}`,
+      `Blueprint observations: ${[...claim.blueprintObservationIds].sort().join(", ") || "none"}`,
       `Supporting evidence: ${evidenceLinks(claim.evidenceSliceIds, referenceGate) || "none"}`,
       `Counter-evidence: ${evidenceLinks(claim.counterEvidenceSliceIds, referenceGate) || "none"}`,
       "Limitations:", ...bullets(claim.limitations), "",
     ]),
-    "## Design principles", "",
+    "## Observation-to-decision trace", "",
+    ...[...dossier.principles, ...dossier.architecture, ...dossier.specifications, ...dossier.testConcepts]
+      .sort((a, b) => a.id.localeCompare(b.id)).flatMap((concept) => {
+        const claims = dossier.claims.filter((claim) => (concept.supportingClaimIds ?? []).includes(claim.id));
+        const observations = [...new Set(claims.flatMap((claim) => claim.blueprintObservationIds))].sort();
+        const decisions = dossier.localMappings.filter((mapping) => mapping.referenceConceptIds.includes(concept.id));
+        return [
+          `- ${concept.id} → ${decisions.map((mapping) => mapping.decision).join(", ") || "UNMAPPED"}`,
+          `  Claims: ${claims.map((claim) => `${claim.id} [${claim.status}]`).sort().join(", ") || "none"}`,
+          `  Observations: ${observations.join(", ") || "none"}`,
+          `  Evidence: ${evidenceLinks([...concept.evidenceSliceIds].sort(), referenceGate) || "none (abstention only)"}`,
+        ];
+      }),
+    "", "## Design principles", "",
   ];
   for (const principle of dossier.principles) {
     lines.push(
@@ -88,7 +103,7 @@ export function renderDesignDossier(dossier: DesignDossier, referenceGate: GateR
 }
 
 export function renderAdaptationBrief(dossier: DesignDossier): string {
-  const mappings = dossier.localMappings.map((mapping) => [
+  const mappings = dossier.localMappings.filter((mapping) => mapping.decision !== "reject").map((mapping) => [
     `## ${mapping.localConcern}`, "", `Decision: ${mapping.decision}`, `Why: ${mapping.rationale}`,
     `Reference concepts: ${mapping.referenceConceptIds.join(", ")}`, "", "Required adaptations:", ...bullets(mapping.adaptations), "",
     "Expected targets:", ...bullets(mapping.targetPaths), "", "Acceptance tests:", ...bullets(mapping.acceptanceTests), "",
@@ -109,6 +124,10 @@ Required quality attributes:
 ${bullets(dossier.localContext.qualityAttributes).join("\n")}
 
 ${mappings.join("\n")}
+## Rejected transfers
+
+${bullets(dossier.localMappings.filter((mapping) => mapping.decision === "reject").map((mapping) => `${mapping.localConcern}: ${mapping.rationale}`)).join("\n")}
+
 ## Guardrails
 
 - Preserve local requirements and existing verified conventions over reference details.
@@ -120,10 +139,17 @@ ${mappings.join("\n")}
 }
 
 export function renderDesignAgentContext(result: DesignGateResult): string {
+  if (!result.approved || result.dossierFingerprint !== fingerprintDesignDossier(result.dossier)) {
+    throw new Error("Cannot render approved coding context from a rejected or changed design dossier");
+  }
   const dossier = result.dossier;
-  const claims = dossier.claims.filter((item) => item.status !== "unknown").map((item) => `- [${item.status}; ${item.confidence.toFixed(2)}] ${item.statement}`).join("\n");
+  const activeIds = new Set(dossier.localMappings.filter((item) => item.decision !== "reject").flatMap((item) => item.referenceConceptIds));
+  const activeClaims = new Set([...dossier.principles, ...dossier.architecture, ...dossier.specifications, ...dossier.testConcepts]
+    .filter((item) => activeIds.has(item.id)).flatMap((item) => item.supportingClaimIds ?? []));
+  const claims = dossier.claims.filter((item) => item.status !== "unknown" && activeClaims.has(item.id))
+    .map((item) => `- [${item.status}; ${item.confidence.toFixed(2)}] ${item.statement}${item.limitations.length ? ` Limits: ${item.limitations.join("; ")}` : ""}`).join("\n");
   const uncertainties = dossier.claims.filter((item) => item.status === "unknown").map((item) => `- ${item.statement}: ${item.limitations.join("; ")}`).join("\n");
-  const principles = dossier.principles.map((item) => [
+  const principles = dossier.principles.filter((item) => activeIds.has(item.id)).map((item) => [
     `### ${item.id}: ${item.title}`,
     `- Problem: ${item.problem}`,
     `- Decision: ${item.decision}`,
@@ -133,27 +159,27 @@ export function renderDesignAgentContext(result: DesignGateResult): string {
     ...item.fitsWhen.map((value) => `- Fits when: ${value}`),
     ...item.failsWhen.map((value) => `- Fails when: ${value}`),
   ].join("\n")).join("\n\n");
-  const architecture = dossier.architecture.map((item) => [
+  const architecture = dossier.architecture.filter((item) => activeIds.has(item.id)).map((item) => [
     `### ${item.id}: ${item.name}`,
     `- Responsibility: ${item.responsibility}`,
     ...item.invariants.map((value) => `- Invariant: ${value}`),
     ...item.failureModes.map((value) => `- Failure mode: ${value}`),
     ...item.extensionPoints.map((value) => `- Extension point: ${value}`),
   ].join("\n")).join("\n\n");
-  const specs = dossier.specifications.map((item) => [
+  const specs = dossier.specifications.filter((item) => activeIds.has(item.id)).map((item) => [
     `### ${item.id}: ${item.subject}`,
     ...item.preconditions.map((value) => `- Precondition: ${value}`),
     ...item.postconditions.map((value) => `- Postcondition: ${value}`),
     ...item.invariants.map((value) => `- Invariant: ${value}`),
     ...item.errorSemantics.map((value) => `- Error semantics: ${value}`),
   ].join("\n")).join("\n\n");
-  const testConcepts = dossier.testConcepts.map((item) => [
+  const testConcepts = dossier.testConcepts.filter((item) => activeIds.has(item.id)).map((item) => [
     `### ${item.id}: ${item.behavior}`,
     `- Layer: ${item.layer}`,
     `- Oracle: ${item.oracle}`,
     ...item.failureCases.map((value) => `- Failure case: ${value}`),
   ].join("\n")).join("\n\n");
-  const mappings = dossier.localMappings.map((item) => [
+  const mappings = dossier.localMappings.filter((item) => item.decision !== "reject").map((item) => [
     `### ${item.localConcern}`,
     `- Decision: ${item.decision}`,
     `- Rationale: ${item.rationale}`,
@@ -163,6 +189,8 @@ export function renderDesignAgentContext(result: DesignGateResult): string {
     ...item.acceptanceTests.map((value) => `- Acceptance test: ${value}`),
   ].join("\n")).join("\n\n");
   const excluded = dossier.negativeSpace.map((item) => `- ${item.choice}: ${item.rationale}`).join("\n");
+  const rejected = dossier.localMappings.filter((item) => item.decision === "reject")
+    .map((item) => `- ${item.localConcern}: ${item.rationale}`).join("\n");
   return `# Approved design-taste context
 
 Task fingerprint: ${dossier.taskFingerprint}
@@ -211,6 +239,10 @@ ${mappings}
 ## Deliberate negative space
 
 ${excluded}
+
+## Rejected transfers — do not implement
+
+${rejected || "- None recorded."}
 
 ## Global risks
 

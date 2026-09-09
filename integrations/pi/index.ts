@@ -130,7 +130,7 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
       sections: Type.Array(blueprintSectionSchema, { minItems: 1, maxItems: 2 }),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const blueprints = controller.getSemanticBlueprints(params.repositories);
+      const blueprints = await controller.getSemanticBlueprints(params.repositories, params.sections);
       setStatus(ctx, controller);
       const selectedSections = [...new Set(params.sections)];
       const text = blueprints.map((blueprint) => [
@@ -197,20 +197,20 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
         limitations: strings(),
       }), { minItems: 1, maxItems: 30 }),
       principles: Type.Array(Type.Object({
-        id: conceptIdSchema, title: Type.String({ minLength: 1 }), problem: Type.String({ minLength: 12 }),
+        id: conceptIdSchema, supportingClaimIds: strings(), title: Type.String({ minLength: 1 }), problem: Type.String({ minLength: 12 }),
         constraints: strings(), decision: Type.String({ minLength: 12 }), mechanisms: strings(), tradeoffs: strings(),
         nonGoals: strings(), fitsWhen: strings(), failsWhen: strings(), evidenceSliceIds: strings(),
       }), { minItems: 1, maxItems: 12 }),
       architecture: Type.Array(Type.Object({
-        id: conceptIdSchema, name: Type.String({ minLength: 1 }), responsibility: Type.String({ minLength: 12 }),
+        id: conceptIdSchema, supportingClaimIds: strings(), name: Type.String({ minLength: 1 }), responsibility: Type.String({ minLength: 12 }),
         collaborators: strings(), invariants: strings(), failureModes: strings(), extensionPoints: strings(), evidenceSliceIds: strings(),
       }), { minItems: 1, maxItems: 16 }),
       specifications: Type.Array(Type.Object({
-        id: conceptIdSchema, subject: Type.String({ minLength: 12 }), preconditions: strings(), postconditions: strings(),
+        id: conceptIdSchema, supportingClaimIds: strings(), subject: Type.String({ minLength: 12 }), preconditions: strings(), postconditions: strings(),
         invariants: strings(), errorSemantics: strings(), evidenceSliceIds: strings(),
       }), { minItems: 1, maxItems: 16 }),
       testConcepts: Type.Array(Type.Object({
-        id: conceptIdSchema, behavior: Type.String({ minLength: 12 }), layer: testLayerSchema, oracle: Type.String({ minLength: 12 }),
+        id: conceptIdSchema, supportingClaimIds: strings(), behavior: Type.String({ minLength: 12 }), layer: testLayerSchema, oracle: Type.String({ minLength: 12 }),
         setup: strings(), failureCases: strings(), evidenceSliceIds: strings(),
       }), { minItems: 1, maxItems: 16 }),
       negativeSpace: Type.Array(Type.Object({

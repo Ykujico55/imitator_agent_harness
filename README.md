@@ -116,7 +116,7 @@ npm install
 npx pi -e ./integrations/pi/index.ts
 ```
 
-从认证、启动到两次确认的完整命令见 [启动与操作手册](docs/startup.md)；更完整的集成原理、安全边界和测试方式见 [Pi 接入说明](docs/pi-integration.md)。Pi 扩展机制和 package 安装方式以 [Pi Extensions](https://pi.dev/docs/latest/extensions) 与 [Pi Packages](https://pi.dev/docs/latest/packages) 为准。
+从认证、启动到两次确认的完整命令见 [启动与操作手册](docs/startup.md)；集中能力与拒绝边界见 [项目能力边界](docs/capability-boundaries.md)；更完整的集成原理、安全边界和测试方式见 [Pi 接入说明](docs/pi-integration.md)。Pi 扩展机制和 package 安装方式以 [Pi Extensions](https://pi.dev/docs/latest/extensions) 与 [Pi Packages](https://pi.dev/docs/latest/packages) 为准。
 
 ## 真实模型 A/B eval
 
@@ -161,4 +161,4 @@ Rust 参考学习已增加 dependency-free 静态语义分析：trait/impl、数
 
 解析能力不会直接奖励仓库设计分。独立的语义证据质量层将可读内容、完整语法单元、静态关系和实现—测试交叉印证分开记录，并修复“增强语言解析失败就像没有内容、普通语言非空就通过”的覆盖不对称。详见 [语义证据质量](docs/semantic-evidence-quality.md)。
 
-见 [Design Dossier 协议](docs/design-dossier.md)、[Reference Semantic Blueprint](docs/semantic-blueprint.md) 与 [架构和边界](docs/architecture.md)。当前已经实现 provider-neutral 的结构化协议、Repository Design Atlas、Evidence Bundle、事实/观察/推断/未知分级、Pi 双重持久门禁、人工/独立 judge 确认、逐文件语义路由、TS/JS、可选 Python AST 和 Rust 静态语义切片及五阶段 paired A/B eval。Atlas 支持 Node/Cargo/Python manifest、TS/JS 相对 import、Python 包候选与 Rust 模块候选；其他生态仍以树结构索引。尚未证明真实模型质量收益。下一阶段让深度解析更直接地提高多角色切片与 Blueprint 的覆盖和精度；从已确认设计到本地代码的跨语言映射继续由 coding model 与本地测试完成。
+见 [Design Dossier 协议](docs/design-dossier.md)、[Reference Semantic Blueprint](docs/semantic-blueprint.md) 与 [架构和边界](docs/architecture.md)。当前已经实现 provider-neutral 的结构化协议、Repository Design Atlas、Evidence Bundle、事实/观察/推断/未知分级、Pi 双重持久门禁、人工/独立 judge 确认、逐文件语义路由、TS/JS、可选 Python AST 和 Rust 静态语义切片及五阶段 paired A/B eval。Atlas 支持 Node/Cargo/Python manifest、TS/JS 相对 import、Python 包候选与 Rust 模块候选；增强观察已驱动按角色补读、边际证据提纯、Blueprint 和逐项 adopt/adapt/reject 映射，其他生态仍以树结构索引。尚未证明真实模型质量收益；从已确认设计到本地代码的跨语言映射继续由 coding model 与本地测试完成。

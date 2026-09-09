@@ -54,8 +54,8 @@ function preparedRun(): PreparedRun {
     queries: ["coding agent hook registry"],
     assessments: [assessment],
     atlases: [matureAtlas(repository)],
-    slices: [slice("approved-slice", "src/hooks.ts"), slice("uncited-slice", "test/hooks.test.ts")],
-    bundles: [matureBundle(repository, ["approved-slice"])],
+    slices: [slice("approved-slice", "src/hooks.ts"), slice("related-slice", "test/hooks.test.ts"), slice("uncited-slice", "docs/unrelated.md")],
+    bundles: [matureBundle(repository, ["approved-slice", "related-slice"])],
     practices: [],
   };
   return {
@@ -71,7 +71,7 @@ function runtime(run: PreparedRun): PiHarnessRuntime {
     async prepare() { return run; },
     async review(current, submission) { return applyReviewGate(current.pack, submission, current.config); },
     async confirm(current, submission, provisional, confirmation) {
-      return applyReviewConfirmation(current.pack, current.taskIdentity.fingerprint, submission, provisional, confirmation);
+      return applyReviewConfirmation(current.pack, current.taskIdentity.fingerprint, submission, provisional, confirmation, current.config);
     },
     async evaluateDesign(current, referenceGate, dossier) {
       return evaluateDesignDossier(dossier, referenceGate, current.taskIdentity.fingerprint);
@@ -122,11 +122,11 @@ function approvedDesign(run: PreparedRun): DesignDossier {
     },
     claims: [{
       id: "claim_registry_boundary", statement: "The reference separates hook registration from provider-specific execution.",
-      status: "observed", confidence: 0.8, evidenceBundleIds: ["bundle-architecture"],
-      evidenceSliceIds: ["approved-slice"], counterEvidenceSliceIds: [], blueprintObservationIds: [blueprintObservationId], limitations: [],
+      status: "inferred", confidence: 0.8, evidenceBundleIds: ["bundle-architecture"],
+      evidenceSliceIds: ["approved-slice"], counterEvidenceSliceIds: [], blueprintObservationIds: [blueprintObservationId], limitations: ["The local failure policy and testing oracle are adaptations inferred from the reference contract."],
     }],
     principles: [{
-      id: "principle_registry", title: "Separate registration from execution",
+      id: "principle_registry", supportingClaimIds: ["claim_registry_boundary"], title: "Separate registration from execution",
       problem: "Registration concerns otherwise leak into provider-specific runtime execution.", constraints: ["Providers expose different payload types."],
       decision: "Keep descriptors provider-neutral behind a narrow registry contract.", mechanisms: ["Store descriptors separately from executors."],
       tradeoffs: ["An adapter layer adds code while containing provider coupling."], nonGoals: ["Do not copy upstream provider types."],
@@ -134,17 +134,17 @@ function approvedDesign(run: PreparedRun): DesignDossier {
       evidenceSliceIds: ["approved-slice"],
     }],
     architecture: [{
-      id: "architecture_registry", name: "Hook registry", responsibility: "Own descriptors without invoking provider behavior.",
+      id: "architecture_registry", supportingClaimIds: ["claim_registry_boundary"], name: "Hook registry", responsibility: "Own descriptors without invoking provider behavior.",
       collaborators: ["Executor"], invariants: ["Registration never invokes hooks."], failureModes: ["Duplicate names fail before execution."],
       extensionPoints: ["Descriptor validation"], evidenceSliceIds: ["approved-slice"],
     }],
     specifications: [{
-      id: "spec_registry", subject: "Registration and lookup behavior contract.", preconditions: ["Name is non-empty."],
+      id: "spec_registry", supportingClaimIds: ["claim_registry_boundary"], subject: "Registration and lookup behavior contract.", preconditions: ["Name is non-empty."],
       postconditions: ["Registered descriptors are retrievable."], invariants: ["Descriptors remain provider-neutral."],
       errorSemantics: ["Duplicate names fail deterministically."], evidenceSliceIds: ["approved-slice"],
     }],
     testConcepts: [{
-      id: "test_registry", behavior: "Registration changes lookup without invoking hooks.", layer: "contract",
+      id: "test_registry", supportingClaimIds: ["claim_registry_boundary"], behavior: "Registration changes lookup without invoking hooks.", layer: "contract",
       oracle: "A hook spy remains untouched after registration.", setup: ["Use a provider-neutral hook spy."],
       failureCases: ["Duplicate registration reports the documented error."], evidenceSliceIds: ["approved-slice"],
     }],
@@ -207,23 +207,28 @@ test("Pi controller enforces prepare-review-approve before mutation", async () =
   assert.equal(prepared.taskFingerprint, run.taskIdentity.fingerprint);
   assert.equal(prepared.candidates[0]!.atlas.coverage.score, 90);
   assert.equal(prepared.candidates[0]!.bundles[0]!.id, "bundle-architecture");
-  assert.equal(prepared.candidates[0]!.slices.length, 2);
+  assert.equal(prepared.candidates[0]!.slices.length, 3);
   assert.match(controller.mutationBlockReason("bash")!, /submit_review/);
   const bundles = await controller.getEvidenceBundles(["bundle-architecture"]);
   assert.equal(bundles[0]!.slices[0]!.path, "src/hooks.ts");
   assert.equal(controller.status().readSlices, 0);
   await controller.getEvidence(["approved-slice"]);
   const result = await controller.submitReview("pi-test", [approvedDecision()]);
-  assert.equal(result.approvedPack.slices.length, 1);
+  assert.equal(result.approvedPack.slices.length, 2);
   assert.equal(controller.status().phase, "awaiting_confirmation");
   assert.match(controller.mutationBlockReason("write")!, /confirmation/);
   await controller.confirmReview("human-test", "human");
   assert.equal(controller.status().phase, "distilling");
-  const blueprints = controller.getSemanticBlueprints();
+  await controller.getSemanticBlueprints([], ["modules"]);
+  await assert.rejects(() => controller.submitDesignDossier(approvedDesign(run)), /blueprint observation that was not inspected/);
+  const blueprints = await controller.getSemanticBlueprints([], ["contracts"]);
   assert.equal(blueprints.length, 1);
   assert.ok(blueprintObservations(blueprints).some((observation) => observation.evidenceSliceIds.includes("approved-slice")));
   assert.match(controller.mutationBlockReason("write")!, /design dossier/i);
   await assert.rejects(() => controller.getEvidence(["uncited-slice"]), /not approved/);
+  const uninspected = approvedDesign(run);
+  uninspected.claims[0]!.evidenceSliceIds.push("related-slice");
+  await assert.rejects(() => controller.submitDesignDossier(uninspected), /evidence that was not inspected.*related-slice/);
   const design = await controller.submitDesignDossier(approvedDesign(run));
   assert.equal(design.approved, true, design.reasons.join("\n"));
   assert.equal(controller.status().phase, "awaiting_design_confirmation");
@@ -268,6 +273,7 @@ test("Pi state survives restart and rejects an integrity-modified state file", a
   const distilling = new PiHarnessController(runtime(run), 6, store);
   assert.equal(await distilling.restore(cwd), true);
   assert.equal(distilling.status().phase, "distilling");
+  await distilling.getSemanticBlueprints([], ["contracts"]);
   await distilling.submitDesignDossier(approvedDesign(run));
 
   const designWaiting = new PiHarnessController(runtime(run), 6, store);

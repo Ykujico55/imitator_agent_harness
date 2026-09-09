@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { EvidenceBundle, EvidenceKind, EvidenceSlice, HarnessConfig, RepositoryDesignAtlas } from "./types.ts";
 import { isTestPath, isTestSupportPath } from "./evidence-path.ts";
 import { summarizeBundleStrength } from "./analysis-quality.ts";
+import { relationSupport } from "./evidence-support.ts";
 
 const DOCUMENTATION = /(^|\/)(README|docs?|architecture|design|adr|rfcs?)(\/|\.|$)|(^|\/)(ADR|RFC)-?\d+/i;
 const DESIGN_DECISION = /(^|\/)(architecture|design|adr|rfcs?)(\/|\.|$)|(^|\/)(ADR|RFC)-?\d+/i;
@@ -13,6 +14,7 @@ export function supportsExplicitIntent(slice: Pick<EvidenceSlice, "path">): bool
 }
 
 export function evidenceKind(slice: EvidenceSlice): EvidenceKind {
+  if (slice.evidenceRoles?.length === 0 && slice.architectureRoles?.includes("relationship")) return "relationship";
   if (MANIFEST.test(slice.path)) return "manifest";
   if (isTestSupportPath(slice.path)) return "test-support";
   if (slice.evidenceRoles?.includes("test") && !slice.evidenceRoles.includes("implementation")) return "test";
@@ -63,7 +65,10 @@ function createBundle(input: {
   const selected = selectDiverse(input.slices, input.config.bundles.maxSlicesPerBundle);
   if (!selected.length) return undefined;
   const selectedPaths = new Set(selected.map((slice) => slice.path));
-  const relations = input.atlas.relations.filter((relation) => selectedPaths.has(relation.from) || selectedPaths.has(relation.to)).slice(0, 24);
+  const relationChecks = input.atlas.relations
+    .filter((relation) => selectedPaths.has(relation.from) || selectedPaths.has(relation.to))
+    .map((relation) => ({ relation, support: relationSupport(input.atlas, relation, selected) }));
+  const relations = relationChecks.filter((item) => item.support.supported).map((item) => item.relation).slice(0, 24);
   const evidenceKinds = unique([
     ...selected.flatMap(evidenceKindsForSlice),
     ...(relations.length ? ["relationship" as const] : []),
@@ -73,6 +78,7 @@ function createBundle(input: {
   const limitations: string[] = [];
   if (!explicit) limitations.push("No ADR, RFC, architecture, or design document supports an explicit rationale; treat intent as observed unless separately evidenced.");
   if (!relations.length) limitations.push("No resolved dependency relation connects the selected evidence within the bounded Atlas inspection.");
+  limitations.push(...relationChecks.filter((item) => !item.support.supported).flatMap((item) => item.support.limitations).slice(0, 6));
   if (!evidenceKinds.includes("test")) limitations.push("This bundle has no direct test evidence.");
   if (relations.some((edge) => edge.resolution === "static-candidate")) limitations.push("Python relations identify static file candidates, not verified runtime imports; package exports can shadow from-import child modules.");
   if (relations.some((edge) => edge.resolution === "rust-module-candidate")) limitations.push("Rust relations are filesystem-backed module candidates; cfg evaluation, macro expansion, generated modules and extern-prelude resolution are not verified.");

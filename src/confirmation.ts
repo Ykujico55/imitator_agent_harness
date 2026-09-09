@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import type { GateResult, ReferencePack, ReviewConfirmation, ReviewSubmission } from "./types.ts";
-import { fingerprintReferencePack } from "./review.ts";
+import type { GateResult, HarnessConfig, ReferencePack, ReviewConfirmation, ReviewSubmission } from "./types.ts";
+import { applyReviewGate, fingerprintReferencePack } from "./review.ts";
 
 function canonicalSubmission(submission: ReviewSubmission): object {
   return {
@@ -51,6 +51,7 @@ export function applyReviewConfirmation(
   submission: ReviewSubmission,
   provisional: GateResult,
   confirmation: ReviewConfirmation,
+  config: HarnessConfig,
 ): GateResult {
   const packFingerprint = fingerprintReferencePack(pack);
   if (confirmation.schemaVersion !== 1) throw new Error("review confirmation schemaVersion must be 1");
@@ -59,6 +60,13 @@ export function applyReviewConfirmation(
   }
   if (confirmation.taskFingerprint !== taskFingerprint) throw new Error("Review confirmation belongs to a different task");
   if (confirmation.reviewFingerprint !== fingerprintReviewSubmission(submission)) throw new Error("Review confirmation belongs to a different review submission");
+  const recomputed = applyReviewGate(pack, submission, config);
+  const binding = (gate: GateResult): string => {
+    const { generatedAt: _gateTime, approvedPack, ...gateFields } = gate;
+    const { generatedAt: _packTime, ...packFields } = approvedPack;
+    return JSON.stringify({ ...gateFields, approvedPack: packFields });
+  };
+  if (binding(recomputed) !== binding(provisional)) throw new Error("Review confirmation targets a modified or stale provisional gate");
   if (!confirmation.confirmer.trim()) throw new Error("Review confirmation requires a confirmer identity");
   if (confirmation.rationale.trim().length < 12) throw new Error("Review confirmation requires a meaningful rationale");
   if (confirmation.confirmer.trim().toLowerCase() === submission.reviewer.trim().toLowerCase()) {
@@ -75,7 +83,11 @@ export function applyReviewConfirmation(
   const results = provisional.results.map((result) => result.approved && !confirmed.has(result.repository)
     ? { ...result, approved: false, reasons: [...result.reasons, "Not approved by the independent confirmer"] }
     : result);
-  const approvedIds = new Set(results.filter((result) => result.approved).flatMap((result) => result.decision?.evidenceSliceIds ?? []));
+  const approvedBundleIds = new Set(results.filter((result) => result.approved).flatMap((result) => result.decision?.evidenceBundleIds ?? []));
+  const approvedIds = new Set([
+    ...results.filter((result) => result.approved).flatMap((result) => result.decision?.evidenceSliceIds ?? []),
+    ...provisional.approvedPack.bundles.filter((bundle) => approvedBundleIds.has(bundle.id)).flatMap((bundle) => bundle.evidenceSliceIds),
+  ]);
   const approvedPatterns = results.filter((result) => result.approved).flatMap((result) => result.decision?.transferablePatterns ?? []);
   return {
     ...provisional,
@@ -85,7 +97,9 @@ export function applyReviewConfirmation(
       ...provisional.approvedPack,
       generatedAt: confirmation.confirmedAt,
       assessments: provisional.approvedPack.assessments.filter((assessment) => confirmed.has(assessment.repository.fullName)),
+      atlases: provisional.approvedPack.atlases.filter((atlas) => confirmed.has(atlas.repository)),
       slices: provisional.approvedPack.slices.filter((slice) => approvedIds.has(slice.id)),
+      bundles: provisional.approvedPack.bundles.filter((bundle) => approvedBundleIds.has(bundle.id) && confirmed.has(bundle.repository)),
       practices: [...new Set(approvedPatterns)],
     },
   };

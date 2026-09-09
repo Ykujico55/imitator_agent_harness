@@ -56,7 +56,7 @@ test("reports bounded slice read failures instead of silently losing all evidenc
   assert.ok(failures.every((failure) => failure.reason === "GitHub rate limit exhausted"));
 });
 
-test("scales category quotas to use a larger per-repository evidence budget", async () => {
+test("treats a larger evidence budget as a ceiling and discards redundant slices", async () => {
   const repo = matureRepository();
   repo.tree = [
     { path: "README.md", type: "blob", sha: "readme", size: 1000 },
@@ -76,9 +76,8 @@ test("scales category quotas to use a larger per-repository evidence budget", as
   config.slicing.maxRepositories = 1;
   config.slicing.maxFilesPerRepository = 12;
   const slices = await collectSlices(fakeClient, [assessment], { task: "coding agent extensions" }, config);
-  assert.equal(slices.length, 12);
-  assert.ok(new Set(slices.map((slice) => slice.path)).size === 12);
-  assert.ok(slices.some((slice) => slice.path.startsWith("src/features/")));
+  assert.ok(slices.length < 12);
+  assert.ok(new Set(slices.map((slice) => slice.path)).size === slices.length);
   assert.ok(slices.some((slice) => slice.path.startsWith("test/")));
 });
 

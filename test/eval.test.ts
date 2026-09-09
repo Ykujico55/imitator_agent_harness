@@ -41,6 +41,16 @@ test("rejects executable suites with malformed verification commands", () => {
   assert.throws(() => parseEvalSuite({ schemaVersion: 1, name: "bad", repetitions: 1, tasks: [{ id: "x", fixture: "x", prompt: "x", verify: { command: "", args: "npm test" } }] }), /verify.command/);
 });
 
+test("keeps eval suite names, fixtures and run variants within declared bounds", () => {
+  const task = { id: "x", fixture: "fixture", prompt: "implement behavior", verify: { command: "node", args: ["--test"] } };
+  assert.throws(() => parseEvalSuite({ schemaVersion: 1, name: "../outside", repetitions: 1, tasks: [task] }), /path-safe identifier/);
+  assert.throws(() => parseEvalSuite({ schemaVersion: 1, name: "safe", repetitions: 1, tasks: [{ ...task, fixture: "../outside" }] }), /stay within the suite directory/);
+  assert.throws(() => parseEvalSuite({ schemaVersion: 1, name: "safe", repetitions: 1, tasks: [{ ...task, fixture: "C:\\outside" }] }), /stay within the suite directory/);
+  const suite = parseEvalSuite({ schemaVersion: 1, name: "safe", repetitions: 1, tasks: [{ ...task, fixture: "./nested/fixture" }] });
+  assert.equal(suite.tasks[0]!.fixture, "nested/fixture");
+  assert.throws(() => buildEvalPlan(suite, ["unsafe" as never]), /only baseline and imitator|invalid|At least|variant/i);
+});
+
 test("extracts and validates the last structured independent-judge decision", () => {
   const output = 'log {not json}\nfinal {"approvedRepositories":["example/repo"],"rationale":"Evidence and license support adaptation."}\n';
   assert.deepEqual(extractLastJsonObject(output).approvedRepositories, ["example/repo"]);

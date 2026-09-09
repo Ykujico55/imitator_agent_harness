@@ -11,7 +11,7 @@ test("compiles deterministic multi-modal evidence bundles from Atlas relationshi
   atlas.entryPoints = [{ path: "src/extensions/tool-registry.ts", sourceUrl: "https://example/entry", reason: "entry" }];
   atlas.relations = [{
     from: "test/extensions.test.ts", to: "src/extensions/tool-registry.ts", kind: "tests",
-    evidence: { path: "test/extensions.test.ts", sourceUrl: "https://example/test" },
+    evidence: { path: "test/extensions.test.ts", sourceUrl: `${repository.htmlUrl}/blob/${repository.resolvedRevision}/test/extensions.test.ts#L1` },
   }];
   const slice = (id: string, path: string, content: string, relevance: number): EvidenceSlice => ({
     id, path, content, relevance, repository: repository.fullName, repositoryUrl: repository.htmlUrl,
@@ -38,8 +38,9 @@ test("compiles deterministic multi-modal evidence bundles from Atlas relationshi
     bundles: { ...defaultConfig.bundles, maxBundlesPerRepository: 4 },
   });
   assert.deepEqual(capped.map((bundle) => bundle.concern).sort(), [
-    "failure-semantics", "system-architecture", "technology-selection", "testing-strategy",
+    "module-boundary", "system-architecture", "technology-selection", "testing-strategy",
   ]);
+  assert.ok(!capped.some((bundle) => bundle.concern === "failure-semantics"), "one-sided relationship metadata cannot manufacture a second evidence kind");
 });
 
 test("does not manufacture a bundle from a single evidence modality", () => {

@@ -85,3 +85,10 @@ test("profile vocabulary is canonicalized and task-bound before discovery", () =
   b.domain!.purpose.aliases.push("bounded cache");
   assert.notEqual(fingerprintTask(a, "C:/workspace", "abc"), fingerprintTask(b, "C:/workspace", "abc"));
 });
+
+test("task normalization bounds every discovery input", () => {
+  assert.throws(() => normalizeTaskSpec({ task: "" }), /task must not be empty/);
+  assert.throws(() => normalizeTaskSpec({ task: "bounded", queries: Array.from({ length: 6 }, (_, index) => `query-${index}`) }), /queries must contain at most 5 strings/);
+  assert.throws(() => normalizeTaskSpec({ task: "bounded", language: "x".repeat(101) }), /language exceeds 100 characters/);
+  assert.throws(() => normalizeTaskSpec({ task: "bounded", mustHave: ["x".repeat(2_001)] }), /mustHave exceeds 2000 characters/);
+});

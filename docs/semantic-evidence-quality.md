@@ -39,10 +39,11 @@ Atlas coverage 回答“源码、测试、文档等必要模态是否真实读�
 - Atlas `analysisQuality` 保存总分、信号、五级计数、逐文件路由/解析状态和限制。
 - Slice `evidenceStrength` 保存精确窗口的等级、信号与负空间。
 - Evidence Bundle 保存所选切片的 strongest/weakest 范围，并汇总解析限制。
+- Atlas 保存按语义角色补读的读取理由、停止原因与缺口；切片提纯保存 retained IDs 及 duplicate/redundant/low-value/budget 舍弃原因。
 - Pi prepare、渐进 evidence API、REFERENCE、DESIGN_ATLAS、EVIDENCE_BUNDLES 和 review request 都携带这些字段。
 - Judge 被明确要求把 textual-only、unresolved 和 parser-limited 当作负空间，不能因为语言有适配器而提高置信度。
 
-当前总分尚未经过真实项目校准，因此仍不参与候选排序或门禁。Design Dossier 只使用单条 Blueprint observation 的离散证据强度限制 observed claim 置信度（textual 0.65、syntactic 0.8、resolved 0.9、corroborated 0.95），不会把 repository-level `analysisQuality.score` 当作设计质量。下一步应使用人工标注参考仓库测量完整声明、静态关系和 test-target 的 precision/recall，再校准这些上限。
+当前总分尚未经过真实项目校准，因此仍不参与候选排序或门禁。Design Dossier 使用一个 claim 所引用观察中最弱的离散证据强度限制 observed/inferred claim 置信度（textual 0.65、syntactic 0.8、resolved 0.9、corroborated 0.95），不会把 repository-level `analysisQuality.score` 当作设计质量。下一步应使用人工标注参考仓库测量完整声明、静态关系和 test-target 的 precision/recall，再校准这些上限。
 
 ## 验证
 

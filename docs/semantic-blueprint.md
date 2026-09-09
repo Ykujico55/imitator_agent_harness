@@ -80,7 +80,11 @@ Blueprint 中的观察不能代替 Dossier claim。每个参考派生概念仍�
 
 ## 当前实现
 
-当前 provider-neutral 编译器已经在参考独立确认后执行，并为每个仓库最多生成 80 条观察。八个 section 各有独立的 10 条配额，防止大型声明集合挤掉关系、失败、测试或负空间。观察 ID 绑定 repository、revision、section 和静态 discriminator；每条观察必须引用批准切片，并自动关联包含它的批准 Bundle。
+当前 provider-neutral 编译器在参考独立确认后执行，并为每个仓库最多生成 80 条观察。证据获取先修复必要模态，再根据任务词、解析到的 import、manifest entry、fixture scope 和尚缺的架构角色补读具体文件；预算是上限，不是必须用完的配额。每次读取保留原因、结果和停止原因。
+
+切片阶段为完整声明、引用行及测试体生成候选，然后按新增证据收益选择。选择器优先保留 documentation / manifest / implementation / test 模态及 contract / invariant-candidate / failure / relationship / test 角色，去掉相同来源语义的重复或无新增信息切片，并记录舍弃原因。关系观察要求引用源行和目标文件同时进入批准证据；fixture 印证要求请求方与 fixture 声明均被完整覆盖。完整声明不能靠行区间部分重叠获得 syntactic 标签。
+
+Blueprint 仍按模块、契约、数据模型、关系、失败、测试、扩展点和负空间保持确定性覆盖，但不会为填满 section 配额而保留低价值观察。观察 ID 绑定 repository、revision、section 和静态 discriminator；每条观察必须引用批准切片，并自动关联包含它的批准 Bundle。缺失角色、预算耗尽、解析失败、关系缺端点和 fixture 覆盖不足进入 limitations，相关结论必须降为 inferred/unknown 或被拒绝。
 
 `DESIGN_DOSSIER_REQUEST.json`、`SEMANTIC_BLUEPRINTS.json` 和 `SEMANTIC_BLUEPRINTS.md` 保存同一份结构用于审计。Pi 在 `distilling` 阶段通过 `imitator_get_semantic_blueprint` 按一个仓库、最多两个 section 渐进提供观察，避免把完整 Blueprint 一次注入模型；Design claim 必须同时引用 Blueprint observation、Bundle 和底层 Slice。确定性 gate 拒绝伪造、未批准或与 claim 切片不对齐的观察，并对 observed claim 使用具名证据上限：textual 0.65、syntactic 0.8、resolved 0.9、corroborated 0.95。
 
@@ -88,8 +92,8 @@ Blueprint 中的观察不能代替 Dossier claim。每个参考派生概念仍�
 
 ## 后续实施顺序
 
-1. 让深度分析直接驱动多角色切片，避免一个大型文件只保留单一“最高分”声明；
-2. 用人工标注的 Python、Rust、TS 参考项目验证关键模块、契约、失败语义和 test-target 的 precision/recall；
+1. 用人工标注的 Python、Rust、TS 参考项目验证关键模块、契约、失败语义和 test-target 的 precision/recall；
+2. 按冻结任务卡运行普通 Pi / 增强 Pi 对照，验证弱模型编码结果，而非用分析分数代替收益结论；
 3. 在证明切片/Blueprint 收益后，再扩展更多语言或引入 TypeChecker、CFG、call graph、taint/dataflow 等静态分析能力。
 
 更深的静态分析只有在其输出能进入 Blueprint、能携带来源和不确定性、并能通过人工标注回归证明增益时才应加入。否则它只会增加上下文体积和虚假的确定感。

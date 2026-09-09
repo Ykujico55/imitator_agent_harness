@@ -20,6 +20,8 @@ Design Dossier 是 reference selection 与实际编码之间的压缩层。它�
 - `localMappings`：每个参考概念在本地的 adopt/adapt/reject 决策、理由、必要改造、目标路径和验收测试；
 - `globalRisks`：仍可能破坏设计意图的跨模块风险。
 
+每个 principle、architecture、specification 和 test concept 还必须用 `supportingClaimIds` 明确绑定自己的 claim。Gate 沿着 observation → claim → concept → local mapping 检查来源，使用所有引用观察中最弱的证据上限，禁止一个强观察替另一条弱观察抬高置信度。每个概念只能有一个 adopt/adapt/reject 决策；依赖 inferred claim 的概念只能 adapt 或 reject，依赖 unknown 或仅 negative-space 观察的概念必须 reject。被拒绝概念保留在审计版 Dossier，但不会进入实现上下文。
+
 每个参考派生的 principle、architecture、specification、test concept 和 negative-space 选择都必须引用已批准的 evidence slice ID，而且该切片必须先被一条非 `unknown` claim 分类。Local context 和适配决策来自本地事实，不应伪装成上游证据。
 
 Repository Design Atlas 随 request 提供模块、入口、manifest、测试和依赖关系索引，帮助 agent 判断应该读取哪些证据以及概念处于什么结构位置。Atlas 事实不能替代 slice ID：尤其是技术选型理由，若 ADR/RFC 或其他批准证据没有明确说明，就必须视为未知或模型推断，不能写成上游作者的明确意图。

@@ -102,18 +102,34 @@ async function independentJudgePrompt(workspace: string): Promise<{ prompt: stri
     throw new Error("Coding agent did not produce a provisional review for independent judgment");
   }
   const allowed = state.provisionalGate.results.filter((result) => result.approved).map((result) => result.repository);
-  const cited = new Set(state.submission.decisions.flatMap((decision) => decision.evidenceSliceIds));
+  const citedBundleIds = new Set(state.submission.decisions.flatMap((decision) => decision.evidenceBundleIds));
+  const bundles = state.run.pack.bundles.filter((bundle) => citedBundleIds.has(bundle.id));
+  const cited = new Set([
+    ...state.submission.decisions.flatMap((decision) => decision.evidenceSliceIds),
+    ...bundles.flatMap((bundle) => bundle.evidenceSliceIds),
+  ]);
   let evidenceBudget = 60_000;
   const evidence = state.run.pack.slices.filter((slice) => cited.has(slice.id)).map((slice) => {
     const content = slice.content.slice(0, Math.max(0, evidenceBudget));
     evidenceBudget -= content.length;
-    return { id: slice.id, repository: slice.repository, path: slice.path, license: slice.license, content };
+    return {
+      id: slice.id,
+      repository: slice.repository,
+      path: slice.path,
+      lines: `${slice.startLine}-${slice.endLine}`,
+      sourceUrl: slice.sourceUrl,
+      license: slice.license,
+      evidenceStrength: slice.evidenceStrength,
+      content,
+      truncated: content.length < slice.content.length,
+    };
   });
   const payload = JSON.stringify({
     task: state.run.pack.task,
     taskFingerprint: state.run.taskIdentity.fingerprint,
     proposal: state.submission,
     provisionallyApproved: allowed,
+    bundles,
     evidence,
   });
   return {

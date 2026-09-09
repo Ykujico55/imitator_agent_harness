@@ -19,17 +19,9 @@ const verdicts = new Set<ReviewVerdict>(["adopt", "adapt", "reject", "pending"])
 const risks = new Set<ReviewRisk>(["low", "medium", "high"]);
 
 export function fingerprintReferencePack(pack: ReferencePack): string {
-  const identity = {
-    schemaVersion: pack.schemaVersion,
-    generatedAt: pack.generatedAt,
-    task: pack.task,
-    repositories: pack.assessments.map((item) => [item.repository.fullName, item.repository.resolvedRevision, item.accepted]),
-    atlases: pack.atlases,
-    slices: pack.slices.map((slice) => slice.id),
-    bundles: pack.bundles,
-    selection: pack.selection,
-  };
-  return createHash("sha256").update(JSON.stringify(identity)).digest("hex");
+  // Bind evidence bytes and attribution as well as stable commit/path/range IDs.
+  // This also detects edits to a serialized manifest before it reaches the gate.
+  return createHash("sha256").update(JSON.stringify(pack)).digest("hex");
 }
 
 export function buildReviewRequest(pack: ReferencePack): ReviewRequest {
