@@ -1,6 +1,8 @@
 export type PiControllerPhase =
   | "idle"
   | "preparing"
+  | "advisory_ready"
+  | "bypassed"
   | "reviewing"
   | "awaiting_confirmation"
   | "distilling"
@@ -9,6 +11,8 @@ export type PiControllerPhase =
   | "blocked";
 
 export const IMITATOR_TOOL_NAMES = {
+  learn: "imitator_learn",
+  visualAudit: "imitator_visual_audit",
   prepare: "imitator_prepare",
   getSemanticBlueprint: "imitator_get_semantic_blueprint",
   getEvidenceBundle: "imitator_get_evidence_bundle",
@@ -16,6 +20,16 @@ export const IMITATOR_TOOL_NAMES = {
   submitReview: "imitator_submit_review",
   submitDesignDossier: "imitator_submit_design_dossier",
 } as const;
+
+export const ADVISORY_TOOL_NAMES = [IMITATOR_TOOL_NAMES.learn, IMITATOR_TOOL_NAMES.visualAudit] as const;
+export const STRICT_TOOL_NAMES = [
+  IMITATOR_TOOL_NAMES.prepare,
+  IMITATOR_TOOL_NAMES.getSemanticBlueprint,
+  IMITATOR_TOOL_NAMES.getEvidenceBundle,
+  IMITATOR_TOOL_NAMES.getEvidence,
+  IMITATOR_TOOL_NAMES.submitReview,
+  IMITATOR_TOOL_NAMES.submitDesignDossier,
+] as const;
 
 export const IMITATOR_COMMAND_NAMES = {
   prepare: "imitator-prepare",
@@ -64,11 +78,28 @@ export const MUTATION_GATE_SIGNALS = {
     code: "no_approved_precedent",
     reason: "Imitator gate [no_approved_precedent]: no precedent passed the confirmed review; revise the search or obtain an approved decision.",
   },
-} as const satisfies Record<Exclude<PiControllerPhase, "approved">, MutationGateSignal>;
+} as const satisfies Record<Exclude<PiControllerPhase, "approved" | "advisory_ready" | "bypassed">, MutationGateSignal>;
+
+export const ADVISORY_GATE_SIGNALS = {
+  idle: {
+    code: "advisory_learning_required",
+    reason: "Imitator adviser [advisory_learning_required]: call imitator_learn once before mutation; it will automatically learn or skip without human confirmation.",
+  },
+  preparing: {
+    code: "advisory_learning_in_progress",
+    reason: "Imitator adviser [advisory_learning_in_progress]: the single bounded learning pass is still running.",
+  },
+} as const;
 
 export function mutationGateSignal(toolName: string, phase: PiControllerPhase): MutationGateSignal | undefined {
-  if (!mutationTools.has(toolName) || phase === "approved") return undefined;
+  if (!mutationTools.has(toolName) || phase === "approved" || phase === "advisory_ready" || phase === "bypassed") return undefined;
   return MUTATION_GATE_SIGNALS[phase];
+}
+
+export function advisoryMutationGateSignal(toolName: string, phase: PiControllerPhase): MutationGateSignal | undefined {
+  if (!mutationTools.has(toolName)) return undefined;
+  if (phase === "idle" || phase === "preparing") return ADVISORY_GATE_SIGNALS[phase];
+  return undefined;
 }
 
 export type PiHealthCheck = {
@@ -92,8 +123,10 @@ export function inspectPiHealth(input: {
   commands: readonly string[];
   hooks: readonly string[];
   store: { ok: boolean; detail: string };
+  mode?: "advisory" | "strict";
 }): PiHealthReport {
-  const missingTools = missing(Object.values(IMITATOR_TOOL_NAMES), input.tools);
+  const expectedTools = input.mode === "advisory" ? ADVISORY_TOOL_NAMES : STRICT_TOOL_NAMES;
+  const missingTools = missing(expectedTools, input.tools);
   const missingCommands = missing(Object.values(IMITATOR_COMMAND_NAMES), input.commands);
   const missingHooks = missing(PI_REQUIRED_HOOKS, input.hooks);
   const checks: PiHealthCheck[] = [
@@ -102,7 +135,7 @@ export function inspectPiHealth(input: {
       ok: missingTools.length === 0 && missingCommands.length === 0,
       detail: missingTools.length || missingCommands.length
         ? `missing tools=[${missingTools.join(", ") || "none"}] commands=[${missingCommands.join(", ") || "none"}]`
-        : `${Object.values(IMITATOR_TOOL_NAMES).length} tools and ${Object.values(IMITATOR_COMMAND_NAMES).length} commands registered`,
+        : `${expectedTools.length} ${input.mode ?? "strict"} tools and ${Object.values(IMITATOR_COMMAND_NAMES).length} commands registered`,
     },
     {
       name: "hooks",

@@ -39,11 +39,17 @@
 
 ## 生命周期与拒绝
 
-Pi 生命周期为 prepare → review → reference confirmation → distill → design confirmation → approved。edit、write、shell 和 patch 类内置 mutation 工具在最终批准前保持锁定。
+Pi 默认生命周期为 idle → 单次 `imitator_learn` → `advisory_ready` 或 `bypassed` → coding。只有单次学习运行前和运行中会拦截已知 mutation 工具；证据收益不足、没有参考或基础设施失败会确定性跳过增强并恢复普通编码，不需要人工确认。
 
-- 参考确认重新运行 deterministic review gate，并绑定完整 reference pack、任务指纹、review submission 和确认身份；修改切片正文、出处、Atlas、Bundle 或评审结果会拒绝确认或恢复。
-- Design 确认绑定 dossier、任务、reference pack 和独立身份。被 reject 的概念不会进入 coding context，原始上游正文也不会进入最终 context。
-- 持久状态绑定规范化任务、工作区路径和 Git HEAD；恢复时重新计算两层 gate。checksum 用于发现损坏和普通误改，不是抵抗可重算 checksum 的恶意本地进程的签名。
+视觉任务在 Imitator extension 内走独立分支：具名任务信号必须达到路由阈值，然后选择一个 bundled curated seed 风格原型、静态读取有界本地视觉源码，并生成 `VISUAL_SPEC`。这些 seed 尚需真实视觉实验校准。它不会修改普通 Pi，也不会为了美感搜索或执行远程项目。实现后的 `imitator_visual_audit` 最多运行两次，只检查源级反模式；不能证明渲染结果漂亮。
+
+advisory 使用独立的证据收益门槛：领域分、元数据和实际实现/测试内容均至少覆盖 50% 核心能力、实现/测试配对、机制或关系、至少两个 syntactic 以上切片均为硬条件。通过后最多向实现上下文提供五条、6000 字符的带出处观察，不提供远程源码。
+
+显式 `IMITATOR_MODE=strict` 时，生命周期为 prepare → review → reference confirmation → distill → design confirmation → approved。edit、write、shell 和 patch 类内置 mutation 工具在最终批准前保持锁定。
+
+- strict 的参考确认重新运行 deterministic review gate，并绑定完整 reference pack、任务指纹、review submission 和确认身份；修改切片正文、出处、Atlas、Bundle 或评审结果会拒绝确认或恢复。
+- strict 的 Design 确认绑定 dossier、任务、reference pack 和独立身份。被 reject 的概念不会进入 coding context，原始上游正文也不会进入最终 context。
+- 两种模式的持久状态均绑定规范化任务、工作区路径、Git HEAD 和 workflow mode；strict 恢复还会重新计算两层 gate。checksum 用于发现损坏和普通误改，不是抵抗可重算 checksum 的恶意本地进程的签名。
 
 ## 评测边界
 

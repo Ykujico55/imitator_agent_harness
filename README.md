@@ -11,9 +11,11 @@
      → 选出 1 个主蓝图（最多 1 个补充蓝图）→ Repository Design Atlas
      → 结构覆盖门禁 → Atlas 引导的 AST/窗口切片
      → 多模态 Evidence Bundle（关系、限制、认识论上限）
-     → 参考选择 proposal → 独立确认
-     → 带事实/观察/推断/未知分级的 Design Dossier
-     → 独立确认 → 本地适配契约 → coding agent
+     → 证据收益门槛 → 有收益则压缩为紧凑 advisory brief
+                         无收益或发现失败则静默跳过
+     → coding agent（本地需求与测试始终优先）
+
+可选 strict 模式：参考选择 proposal → 独立确认 → Design Dossier → 独立确认 → coding agent
 ```
 
 ## 已实现的 v0.8 工作流
@@ -38,15 +40,17 @@
 - 输出 `manifest.json`、`DESIGN_ATLAS.json/.md`、`EVIDENCE_BUNDLES.json/.md`、`REFERENCE.md`、`AGENT_CONTEXT.md`、`REVIEW_REQUEST.json` 和 fail-closed 的 `REVIEW_TEMPLATE.json`。
 - 人或任意模型可填写结构化评审；gate 校验 pack 指纹、证据归属、置信度、风险、范式、错配和风险说明。
 - gate 以 Evidence Bundle 为评审边界，只输出明确批准且被引用的包及其完整内部证据；伪造包、跨仓库引用和包外切片都会被拒绝。
-- 提供 Pi extension：自动注入工作协议，在参考选择和 Design Dossier 双重门禁通过前拦截 `edit`、`write`、`bash`、`powershell` 和 `apply_patch`；参考确认后通过 `imitator_get_semantic_blueprint` 读取增强分析编译出的设计导航层；`/imitator-doctor` 用 registry、hooks、store 三个具名 oracle 检查集成健康。
-- Pi 通过五个渐进式工具完成搜索、按 ID 读取最多 2 个证据包、读取最多 6 个证据切片、提交结构化评审和设计蒸馏；不会把整份参考包直接塞进会话。
-- 任务指纹绑定规范化任务、工作区路径和 prepare 时的 Git HEAD；Pi 状态带完整性校验持久化到 `.imitator/pi-state.json`，重启可恢复，基线变化则 fail closed。
-- Coding agent 的评审只是 proposal；必须由 `/imitator-confirm` 的交互式人工确认，或隔离的独立 judge 身份确认后才能解锁。
-- 参考确认只会进入 `distilling`，不会解锁编码；agent 还必须提交 evidence-bound、语言无关的 Design Dossier。
+- Imitator extension 默认暴露 `imitator_learn` 和视觉任务专用的 `imitator_visual_audit`；普通 Pi 核心不受影响。前者完成一次路由和学习，后者只在视觉实现后运行有界静态检查，全程无需人工确认。
+- 视觉任务不会从任意 GitHub 高星项目猜测美感：插件按具名任务信号选择六个内置、可审计但尚待真实视觉实验校准的 seed 风格原型，从本地 CSS/Tailwind/theme/组件源码提取已有视觉语法，并生成不超过 6000 字符的 `VISUAL_SPEC`。
+- 视觉审计检查纯黑 surface、边框/卡片饱和、统一圆角、字体层级、响应式证据、渐变方向和颜色 token 扩散；最多一次修复和一次复审。它不执行项目，也不冒充像素级审美判断。
+- advisory 收益门槛要求元数据与实际 implementation/test 内容都覆盖至少 50% 核心能力、存在实现/测试配对、机制或关系证据和至少两个 syntactic 以上切片；所有加分均为具名信号并有测试。弱参考、无参考、GitHub 限额或解析错误不会制造审批循环，而是回退到普通 Pi。
+- 注入上下文限制为最多 5 条高价值观察和 6000 字符，保留仓库、commit、许可证、路径、证据 ID 与限制，不包含远程源码。
+- 任务指纹绑定规范化任务、工作区路径和 prepare 时的 Git HEAD；Pi 状态带完整性校验持久化到 `.imitator/pi-state.json`，并额外绑定工作流模式。
+- 可显式设置 `IMITATOR_MODE=strict` 恢复完整审计流：六个渐进工具、参考 proposal、第一次独立确认、Semantic Blueprint、evidence-bound Design Dossier 和第二次独立确认。
 - Dossier 强制描述本地约束/既有惯例/质量属性、设计原则、架构职责与失败模式、规格、测试 oracle、适用与失效条件、权衡、negative space，以及逐项 adopt/adapt/reject 的本地映射。
 - 每个参考派生概念必须引用已批准证据，并由 `explicit`、`observed`、`inferred` 或 `unknown` 主张解释；推断必须记录限制且置信度不高于 0.8，未知不能作为实现概念的唯一依据。
 - Dossier 有 8 万字符及分区数量硬预算；最终 agent context 只含抽象设计契约，不含远程源码或证据 ID。Design 批准后，Pi 也不再向实现 agent 返回原始远程切片。
-- Dossier 先写入 `design-proposal/` 供人工或 judge 审阅；只有不同身份的第二次确认后才进入最终 `approved/` 并解锁。
+- strict 模式下 Dossier 先写入 `design-proposal/` 供人工或 judge 审阅；只有不同身份的第二次确认后才进入最终 `approved/` 并解锁。
 - Pi 通过可扩展的逐文件路由选择 Python、Rust 或 TypeScript/JavaScript 深度适配器；解析观察直接驱动契约、数据、失败、扩展点与测试的多角色完整切片。未知、冲突或没有完整语义单元的文件确定性回退到行窗口，并保留选路和实际降级原因。
 - 提供默认不执行的真实模型 paired A/B eval runner，对比 baseline 与 Imitator + 独立 judge，并记录验收通过率、耗时和变更文件数。
 - 不 clone、不安装、不构建、不执行上游内容；远程文本永远按不可信数据处理。
@@ -83,7 +87,7 @@ node src/cli.ts gate `
   --decisions ".imitator/reference/<timestamp>/REVIEW_TEMPLATE.json"
 ```
 
-CLI 的 `gate` 只验证参考选择，不代表最终授权编码。完整的任务指纹、两次独立确认、Design Dossier 与修改门禁目前由 Pi 集成承载；provider-neutral 核心同时导出了相同的评估、确认和产物 API，供其他 agent harness 接入。
+CLI 的 `gate` 只验证参考选择，不代表最终授权编码。默认 Pi 使用一次 advisory 学习；完整的任务指纹、两次独立确认、Design Dossier 与持续修改门禁由可选 strict 模式承载。provider-neutral 核心同时导出相同的评估、确认和产物 API，供其他 agent harness 接入。
 
 ## 接入 Pi coding agent
 
@@ -94,20 +98,16 @@ npm install -g @earendil-works/pi-coding-agent
 pi install git:github.com/kunjinkao55/imitator_agent_harness
 ```
 
-在目标项目中设置 `GITHUB_TOKEN` 后启动 `pi`。扩展会要求 agent 依次完成：
+在目标项目中设置 `GITHUB_TOKEN` 后启动 `pi`，然后直接发送完整开发任务。默认预编码流程只有一次自动工具调用：
 
-1. `imitator_prepare`：为当前任务检索、评分和切片；
-2. `imitator_get_evidence_bundle`：先读取当前架构问题所需的关系证据包；
-3. `imitator_get_evidence`：再只读取当前判断所需的少量切片；
-4. `imitator_submit_review`：提交带包 ID 和证据 ID 的 adopt/adapt/reject proposal；
-5. 人在 Pi 中第一次执行 `/imitator-confirm`，检查任务指纹和仓库；
-6. `imitator_get_semantic_blueprint`：读取增强分析编译出的模块、契约、关系、失败、测试与负空间导航层；
-7. `imitator_submit_design_dossier`：把 Blueprint observation 与底层证据蒸馏为带认识论分级的跨语言设计规格和本地适配图；
-8. 人检查 `design-proposal/DESIGN_DOSSIER.md`，再次执行 `/imitator-confirm` 才解锁编码。
+1. Agent 可先用只读工具理解本地项目；
+2. `imitator_learn` 提交任务、产品目的和 1–6 个核心能力；
+3. 非视觉任务自动生成 repository `learn` 或 `skip` 决定；视觉任务由插件生成内置风格 `VISUAL_SPEC`，不调用远程仓库；
+4. Pi 立即继续实现和测试，不需要 `/imitator-confirm`；视觉任务实现后额外调用一次 `imitator_visual_audit`，必要时只修复并复审一次。
 
-`imitator_prepare` 可额外接收 `referenceRepositories: [{ repository, revision? }]`。即使自动搜索检查了更多候选，后续 evidence、review、dossier 和 implementation context 也只允许来自最终 1–2 个仓库。
+`imitator_learn` 可额外接收 `referenceRepositories: [{ repository, revision? }]`。即使自动搜索检查了更多候选，最终 brief 也只允许来自 1–2 个通过收益门槛的仓库。
 
-至少一个仓库通过选择门禁、且 Design Dossier 通过确定性校验和独立确认后，Pi 的修改与命令工具才会解锁。可用 `/imitator-status` 查看状态、用 `/imitator-doctor` 检查注册/hook/store 健康，开始新任务前用 `/imitator-reset` 重新上锁；也可用 `/imitator-prepare <任务>` 手动开始检索。
+可用 `/imitator-status` 查看 mode、phase、决定和分数，用 `/imitator-doctor` 检查注册/hook/store 健康，换任务前用 `/imitator-reset`。若确实需要原来的双重确认，启动前设置 `$env:IMITATOR_MODE = "strict"`（Bash 为 `export IMITATOR_MODE=strict`）。
 
 本地开发时无需安装 package：
 
@@ -116,7 +116,7 @@ npm install
 npx pi -e ./integrations/pi/index.ts
 ```
 
-从认证、启动到两次确认的完整命令见 [启动与操作手册](docs/startup.md)；集中能力与拒绝边界见 [项目能力边界](docs/capability-boundaries.md)；更完整的集成原理、安全边界和测试方式见 [Pi 接入说明](docs/pi-integration.md)。Pi 扩展机制和 package 安装方式以 [Pi Extensions](https://pi.dev/docs/latest/extensions) 与 [Pi Packages](https://pi.dev/docs/latest/packages) 为准。
+从认证、默认单次学习到可选 strict 审计的完整命令见 [启动与操作手册](docs/startup.md)；集中能力与拒绝边界见 [项目能力边界](docs/capability-boundaries.md)；更完整的集成原理、安全边界和测试方式见 [Pi 接入说明](docs/pi-integration.md)。Pi 扩展机制和 package 安装方式以 [Pi Extensions](https://pi.dev/docs/latest/extensions) 与 [Pi Packages](https://pi.dev/docs/latest/packages) 为准。
 
 ## 真实模型 A/B eval
 
@@ -161,4 +161,4 @@ Rust 参考学习已增加 dependency-free 静态语义分析：trait/impl、数
 
 解析能力不会直接奖励仓库设计分。独立的语义证据质量层将可读内容、完整语法单元、静态关系和实现—测试交叉印证分开记录，并修复“增强语言解析失败就像没有内容、普通语言非空就通过”的覆盖不对称。详见 [语义证据质量](docs/semantic-evidence-quality.md)。
 
-见 [Design Dossier 协议](docs/design-dossier.md)、[Reference Semantic Blueprint](docs/semantic-blueprint.md) 与 [架构和边界](docs/architecture.md)。当前已经实现 provider-neutral 的结构化协议、Repository Design Atlas、Evidence Bundle、事实/观察/推断/未知分级、Pi 双重持久门禁、人工/独立 judge 确认、逐文件语义路由、TS/JS、可选 Python AST 和 Rust 静态语义切片及五阶段 paired A/B eval。Atlas 支持 Node/Cargo/Python manifest、TS/JS 相对 import、Python 包候选与 Rust 模块候选；增强观察已驱动按角色补读、边际证据提纯、Blueprint 和逐项 adopt/adapt/reject 映射，其他生态仍以树结构索引。尚未证明真实模型质量收益；从已确认设计到本地代码的跨语言映射继续由 coding model 与本地测试完成。
+见 [视觉风格学习与审计](docs/visual-style.md)、[Design Dossier 协议](docs/design-dossier.md)、[Reference Semantic Blueprint](docs/semantic-blueprint.md) 与 [架构和边界](docs/architecture.md)。当前已经实现 provider-neutral 的结构化协议、Repository Design Atlas、Evidence Bundle、事实/观察/推断/未知分级、插件内视觉路由与静态审计、默认 advisory 学习、可选 Pi 双重持久门禁、逐文件语义路由、TS/JS、可选 Python AST 和 Rust 静态语义切片及 paired A/B eval。尚未证明像素级审美或真实模型质量收益；参考观察到本地代码的映射继续由 coding model 与本地测试完成。

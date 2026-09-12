@@ -22,7 +22,7 @@ $env:IMITATOR_PYTHON = 'C:\path\to\python.exe'
 
 该环境变量是解释器可执行文件路径，不是 shell 命令，不能写成 `python -m ...`。不要使用参考仓库内的解释器或启动脚本。设置后重启 Pi，用普通任务消息重新 prepare；旧 reference pack 不会自动补出 AST。
 
-目标实现语言不必是 Python；只要选中的参考包含 `.py`、`pyproject.toml` 或 `setup.cfg`，Pi 就会尝试解析。任务领域、1–2 个参考限制、许可证策略和两次独立确认均保持不变。
+目标实现语言不必是 Python；只要选中的参考包含 `.py`、`pyproject.toml` 或 `setup.cfg`，Pi 就会尝试解析。任务领域、1–2 个参考限制和许可证策略保持不变；默认 advisory 自动 learn/skip，只有 strict 模式保留两次独立确认。
 
 独立核心 API 的调用方可向 `prepareReferencePack` 注入 `sourceAnalyzer` 和 `semanticSelector`；核心不依赖或导入适配器。当前 `node src/cli.ts prepare` 仍不自动启动 Python 解析器，默认使用原来的结构索引与行窗口。不要把 Pi 的能力误认为所有调用入口都已启用。
 

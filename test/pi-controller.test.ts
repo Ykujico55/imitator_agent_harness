@@ -13,14 +13,18 @@ import { createTaskIdentity } from "../src/task.ts";
 import type { DesignDossier, EvidenceSlice, ReferencePack, RepositoryReviewDecision } from "../src/types.ts";
 import { PiHarnessController, type PiHarnessRuntime, type PreparedRun } from "../integrations/pi/controller.ts";
 import {
+  ADVISORY_GATE_SIGNALS,
+  ADVISORY_TOOL_NAMES,
   IMITATOR_COMMAND_NAMES,
   IMITATOR_TOOL_NAMES,
   MUTATION_GATE_SIGNALS,
   MUTATION_TOOL_DENY_LIST,
   PI_REQUIRED_HOOKS,
   inspectPiHealth,
+  advisoryMutationGateSignal,
   mutationGateSignal,
   renderPiHealth,
+  STRICT_TOOL_NAMES,
   type PiControllerPhase,
 } from "../integrations/pi/contract.ts";
 import { FilePiStateStore, inspectWorkspace, type PersistedPiPayload, type PiStateStore } from "../integrations/pi/state.ts";
@@ -45,6 +49,8 @@ function preparedRun(): PreparedRun {
     content: "export interface HookRegistry {}",
     strategy: "typescript-ast",
     symbols: ["HookRegistry"],
+    evidenceRoles: path.startsWith("src/") ? ["implementation"] : path.startsWith("test/") ? ["test"] : undefined,
+    architectureRoles: path.startsWith("src/") ? ["contract", "relationship"] : path.startsWith("test/") ? ["test", "failure"] : undefined,
     evidenceStrength: { level: "syntactic", signals: ["complete-semantic-unit"], limitations: [] },
   });
   const pack: ReferencePack = {
@@ -166,19 +172,23 @@ test("declared mutation tools and phase decisions are deterministic named signal
   assert.deepEqual([...MUTATION_TOOL_DENY_LIST], ["edit", "write", "bash", "powershell", "apply_patch"]);
   assert.equal(new Set(Object.values(IMITATOR_TOOL_NAMES)).size, Object.values(IMITATOR_TOOL_NAMES).length);
   assert.equal(new Set(Object.values(IMITATOR_COMMAND_NAMES)).size, Object.values(IMITATOR_COMMAND_NAMES).length);
-  const guardedPhases = Object.keys(MUTATION_GATE_SIGNALS) as Array<Exclude<PiControllerPhase, "approved">>;
+  const guardedPhases = Object.keys(MUTATION_GATE_SIGNALS) as Array<Exclude<PiControllerPhase, "approved" | "advisory_ready" | "bypassed">>;
   assert.equal(new Set(guardedPhases.map((phase) => MUTATION_GATE_SIGNALS[phase].code)).size, guardedPhases.length);
   for (const phase of guardedPhases) {
     assert.deepEqual(mutationGateSignal("write", phase), MUTATION_GATE_SIGNALS[phase]);
     assert.match(MUTATION_GATE_SIGNALS[phase].reason, new RegExp(`\\[${MUTATION_GATE_SIGNALS[phase].code}\\]`));
   }
   assert.equal(mutationGateSignal("write", "approved"), undefined);
+  assert.equal(mutationGateSignal("write", "advisory_ready"), undefined);
+  assert.equal(mutationGateSignal("write", "bypassed"), undefined);
   assert.equal(mutationGateSignal("read", "idle"), undefined);
+  assert.deepEqual(advisoryMutationGateSignal("write", "idle"), ADVISORY_GATE_SIGNALS.idle);
+  assert.equal(advisoryMutationGateSignal("write", "bypassed"), undefined);
 });
 
 test("Pi health report uses registry, hooks, and store behavior oracles", () => {
   const report = inspectPiHealth({
-    tools: Object.values(IMITATOR_TOOL_NAMES),
+    tools: STRICT_TOOL_NAMES,
     commands: Object.values(IMITATOR_COMMAND_NAMES),
     hooks: PI_REQUIRED_HOOKS,
     store: { ok: true, detail: "checksum-valid persisted state (reviewing)" },
@@ -249,6 +259,94 @@ test("Pi controller bounds progressive evidence reads", async () => {
   await controller.prepare({ task: "coding agent hook registry" }, "C:/workspace");
   await assert.rejects(() => controller.getEvidence(["approved-slice", "uncited-slice"]), /At most 1/);
   await assert.rejects(() => controller.getEvidence(["forged"]), /unknown or not approved/);
+});
+
+test("advisory controller learns or skips in one call without confirmation", async (t) => {
+  const cwd = await mkdtemp(resolve(tmpdir(), "imitator-advisory-"));
+  t.after(async () => rm(cwd, { recursive: true, force: true }));
+  const run = preparedRun();
+  run.pack.assessments[0]!.dimensions.domainMatch = { score: 80, reasons: ["same core product purpose", "domain-capability-coverage: 2/2; hooks"] };
+  run.pack.assessments[0]!.accepted = true;
+  run.directory = resolve(cwd, ".imitator", "reference", "fixture");
+  run.taskIdentity = await inspectWorkspace(run.pack.task, cwd);
+  await mkdir(run.directory, { recursive: true });
+  const store = new MemoryStateStore();
+  const controller = new PiHarnessController(runtime(run), 6, store, "advisory");
+  const result = await controller.learn({
+    task: "Build a coding agent hook registry",
+    purpose: "coding agent hook registry",
+    capabilities: ["registry"],
+  }, cwd);
+  assert.equal(result.decision, "learn");
+  assert.equal(controller.status().phase, "advisory_ready");
+  assert.equal(controller.mutationBlockReason("write"), undefined);
+  assert.match(controller.systemContext(), /compact advisory brief/);
+  assert.match(await readFile(resolve(run.directory, "ADVISORY_BRIEF.md"), "utf8"), /Builder contract/);
+
+  const restored = new PiHarnessController(runtime(run), 6, store, "advisory");
+  assert.equal(await restored.restore(cwd), true);
+  assert.equal(restored.status().phase, "advisory_ready");
+  assert.equal(restored.mutationBlockReason("bash"), undefined);
+
+  const failed = new PiHarnessController({
+    ...runtime(run),
+    async prepare() { throw new Error("GitHub quota exhausted"); },
+  }, 6, new MemoryStateStore(), "advisory");
+  const skipped = await failed.learn({
+    task: "Build a coding agent hook registry", purpose: "coding agent hook registry", capabilities: ["hook registration"],
+  }, cwd);
+  assert.equal(skipped.decision, "skip");
+  assert.equal(failed.status().phase, "bypassed");
+  assert.match(skipped.brief, /continue normal coding/);
+  assert.equal(failed.mutationBlockReason("edit"), undefined);
+});
+
+test("visual frontend tasks stay inside the Imitator plugin and bypass remote repository discovery", async (t) => {
+  const cwd = await mkdtemp(resolve(tmpdir(), "imitator-visual-controller-"));
+  t.after(async () => rm(cwd, { recursive: true, force: true }));
+  await mkdir(resolve(cwd, "src"), { recursive: true });
+  await writeFile(resolve(cwd, "src", "app.css"), "body { background: #000; color: #eee; font-size: 14px; }", "utf8");
+  let remotePrepareCalls = 0;
+  const run = preparedRun();
+  const store = new MemoryStateStore();
+  const controller = new PiHarnessController({
+    ...runtime(run),
+    async prepare() { remotePrepareCalls += 1; throw new Error("visual route must not discover remote repositories"); },
+  }, 6, store, "advisory");
+  const learned = await controller.learn({
+    task: "Build a responsive React analytics dashboard with a polished visual hierarchy",
+    purpose: "analytics dashboard",
+    capabilities: ["metric exploration", "filtering data"],
+    language: "TypeScript",
+  }, cwd);
+  assert.equal(remotePrepareCalls, 0);
+  assert.equal(learned.route, "visual-style");
+  assert.equal(learned.visual?.spec.profile.id, "data-console");
+  assert.equal(controller.status().phase, "advisory_ready");
+  assert.equal(controller.status().advisoryRoute, "visual-style");
+  assert.match(await readFile(resolve(learned.directory!, "VISUAL_SPEC.md"), "utf8"), /Readable data console/);
+  assert.match(await readFile(resolve(learned.directory!, "VISUAL_SOURCE_INDEX.json"), "utf8"), /src\/app.css/);
+
+  const firstAudit = await controller.auditVisual(cwd);
+  assert.equal(firstAudit?.status, "blocked");
+  assert.ok(firstAudit?.findings.some((item) => item.signal === "pure-black-surface"));
+  assert.match(controller.systemContext(), /Latest visual audit/);
+  assert.match(controller.systemContext(), /error:pure-black-surface/);
+  await writeFile(resolve(cwd, "src", "app.css"), `
+    :root { --canvas: #f3f6f7; --surface: #ffffff; --ink: #17232e; --accent: #167d78; }
+    body { background: var(--canvas); color: var(--ink); font-size: 14px; }
+    h1 { font-size: 38px; } h2 { font-size: 28px; } small { font-size: 12px; }
+    main { background: var(--surface); } button { background: var(--accent); border-radius: 7px; }
+    @media (max-width: 700px) { h1 { font-size: 28px; } }
+  `, "utf8");
+  const secondAudit = await controller.auditVisual(cwd);
+  assert.equal(secondAudit?.status, "clean");
+  await assert.rejects(() => controller.auditVisual(cwd), /bounded to one repair pass and one re-audit/);
+  const restored = new PiHarnessController(runtime(run), 6, store, "advisory");
+  assert.equal(await restored.restore(cwd), true);
+  assert.equal(restored.status().advisoryRoute, "visual-style");
+  assert.match(restored.systemContext(), /Status: clean; run 2\/2/);
+  await assert.rejects(() => restored.auditVisual(cwd), /bounded to one repair pass and one re-audit/);
 });
 
 test("Pi state survives restart and rejects an integrity-modified state file", async (t) => {
@@ -345,6 +443,12 @@ test("restoring a legacy approved proposal reruns domain review and keeps mutati
 });
 
 test("current Pi loader discovers the declared extension tools, commands, and gates", async (t) => {
+  const previousMode = process.env.IMITATOR_MODE;
+  delete process.env.IMITATOR_MODE;
+  t.after(() => {
+    if (previousMode === undefined) delete process.env.IMITATOR_MODE;
+    else process.env.IMITATOR_MODE = previousMode;
+  });
   const agentDir = await mkdtemp(resolve(tmpdir(), "imitator-pi-agent-"));
   t.after(async () => rm(agentDir, { recursive: true, force: true }));
   const loader = new DefaultResourceLoader({
@@ -361,14 +465,14 @@ test("current Pi loader discovers the declared extension tools, commands, and ga
   assert.deepEqual(loaded.errors, []);
   assert.equal(loaded.extensions.length, 1);
   const extension = loaded.extensions[0]!;
-  assert.deepEqual([...extension.tools.keys()].sort(), Object.values(IMITATOR_TOOL_NAMES).sort());
+  assert.deepEqual([...extension.tools.keys()].sort(), [...ADVISORY_TOOL_NAMES].sort());
   assert.deepEqual([...extension.commands.keys()].sort(), Object.values(IMITATOR_COMMAND_NAMES).sort());
   assert.ok(extension.handlers.has("before_agent_start"));
   assert.ok(extension.handlers.has("tool_call"));
   assert.deepEqual([...extension.handlers.keys()].filter((name) => PI_REQUIRED_HOOKS.includes(name as typeof PI_REQUIRED_HOOKS[number])).sort(), [...PI_REQUIRED_HOOKS].sort());
   const toolCallHandler = extension.handlers.get("tool_call")?.[0];
   assert.ok(toolCallHandler);
-  assert.deepEqual(await toolCallHandler({ toolName: "write" }), { block: true, reason: MUTATION_GATE_SIGNALS.idle.reason });
+  assert.deepEqual(await toolCallHandler({ toolName: "write" }), { block: true, reason: ADVISORY_GATE_SIGNALS.idle.reason });
   assert.equal(await toolCallHandler({ toolName: "read" }), undefined);
 
   loaded.runtime.getAllTools = () => [...extension.tools.values()].map(({ definition, sourceInfo }) => ({ ...definition, sourceInfo }));
@@ -394,4 +498,36 @@ test("current Pi loader discovers the declared extension tools, commands, and ga
   } as never);
   assert.equal(notifications[1]!.type, "error");
   assert.match(notifications[1]!.message, /^store: failed/m);
+});
+
+test("strict Pi mode preserves the explicit six-tool confirmation workflow", async (t) => {
+  const previousMode = process.env.IMITATOR_MODE;
+  process.env.IMITATOR_MODE = "strict";
+  t.after(() => {
+    if (previousMode === undefined) delete process.env.IMITATOR_MODE;
+    else process.env.IMITATOR_MODE = previousMode;
+  });
+  const agentDir = await mkdtemp(resolve(tmpdir(), "imitator-pi-strict-agent-"));
+  t.after(async () => rm(agentDir, { recursive: true, force: true }));
+  const loader = new DefaultResourceLoader({
+    cwd: process.cwd(),
+    agentDir,
+    additionalExtensionPaths: [resolve("integrations/pi/index.ts")],
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true,
+  });
+  await loader.reload();
+  const loaded = loader.getExtensions();
+  assert.deepEqual(loaded.errors, []);
+  assert.equal(loaded.extensions.length, 1);
+  const extension = loaded.extensions[0]!;
+  assert.deepEqual([...extension.tools.keys()].sort(), [...STRICT_TOOL_NAMES].sort());
+  const toolCallHandler = extension.handlers.get("tool_call")?.[0];
+  assert.ok(toolCallHandler);
+  assert.deepEqual(await toolCallHandler({ toolName: "write" }), {
+    block: true,
+    reason: MUTATION_GATE_SIGNALS.idle.reason,
+  });
 });

@@ -83,7 +83,7 @@ Pi 在第一次 `imitator_prepare` 时，根据本地任务填写 `domain`。这
 
 本策略仅控制设计参考的学习准入，不提供法律判断或代码复用授权。复制、再分发或引入依赖前仍需核对实际适用条款；未知许可证不应被当作允许复用。独立评审应记录使用限制，不应仅因许可证元数据未知而把设计学习判为高风险；具体使用方案的真实风险仍可以阻断。
 
-Pi：重启本地新版插件，执行 `/imitator-reset`，用普通消息发送完整任务。模型会在 prepare 工具中补充描述。两次人工确认不变。纯文本 `/imitator-prepare` 仅做探索；继续对话时模型需要带描述重新 prepare。
+Pi：重启本地新版插件，执行 `/imitator-reset`，用普通消息发送完整任务。默认 advisory 模式由模型在一次 `imitator_learn` 中提供简化领域描述，系统自动绑定任务并在 learn/skip 后继续编码，不需人工确认。只有显式 `IMITATOR_MODE=strict` 才使用原 prepare 与两次确认流程。
 
 CLI：把上述 JSON 保存成 `domain.json`，执行：
 

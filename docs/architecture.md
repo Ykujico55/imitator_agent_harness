@@ -27,7 +27,7 @@
 10. Proposal 通过 deterministic gate 后仍进入 `awaiting_confirmation`；只有不同身份的人或独立 agent 才能确认参考集合。
 11. 参考确认后进入 `distilling`。深度解析结果先编译为有出处、有强度和负空间的 Reference Semantic Blueprint；agent 用它导航批准证据，把每个参考派生主张标为 explicit、observed、inferred 或 unknown，再转换为语言无关的 Design Dossier。Blueprint 是观察索引，不是新的仓库质量分或设计结论。
 12. Design gate 验证任务/pack 指纹、1–2 个仓库、包内证据归属、认识论上限、本地约束、概念完整性、适用边界、权衡、negative space、本地映射、目标路径、验收测试与 8 万字符预算。
-13. Dossier 通过后进入 `awaiting_design_confirmation`；第二个独立身份确认后才生成最终抽象 agent context、关闭原始证据读取并解锁编码。
+13. 在 strict 模式中，Dossier 通过后进入 `awaiting_design_confirmation`；第二个独立身份确认后才生成最终抽象 agent context、关闭原始证据读取并解锁编码。默认 advisory 则在一次自动证据收益判断后生成紧凑 brief 或跳过，不进入这两层确认。
 
 ## 威胁模型
 

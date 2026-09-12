@@ -1,7 +1,9 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { DesignDossier, RepositoryReviewDecision } from "../../src/types.ts";
-import { PiHarnessController } from "./controller.ts";
+import type { PiWorkflowMode } from "../../src/advisory.ts";
+import { PiHarnessController, defaultPiHarnessRuntime } from "./controller.ts";
+import { FilePiStateStore } from "./state.ts";
 import { IMITATOR_COMMAND_NAMES, IMITATOR_TOOL_NAMES, inspectPiHealth, renderPiHealth } from "./contract.ts";
 
 const verdictSchema = Type.Union([Type.Literal("adopt"), Type.Literal("adapt"), Type.Literal("reject")]);
@@ -27,8 +29,16 @@ function json(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
 
+function configuredWorkflowMode(): PiWorkflowMode {
+  const value = process.env.IMITATOR_MODE?.trim().toLowerCase();
+  if (!value || value === "advisory") return "advisory";
+  if (value === "strict") return "strict";
+  throw new Error("IMITATOR_MODE must be advisory or strict");
+}
+
 export default function imitatorPiExtension(pi: ExtensionAPI): void {
-  const controller = new PiHarnessController();
+  const workflowMode = configuredWorkflowMode();
+  const controller = new PiHarnessController(defaultPiHarnessRuntime, 6, new FilePiStateStore(), workflowMode);
   const registeredHooks: string[] = [];
 
   pi.on("session_start", async (_event, ctx) => {
@@ -53,6 +63,81 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
   });
   registeredHooks.push("tool_call");
 
+  if (workflowMode === "advisory") {
+    pi.registerTool({
+      name: IMITATOR_TOOL_NAMES.learn,
+      label: "Learn bounded design guidance",
+      description: "Route visual frontend work to the plugin's bundled style system; otherwise run one bounded repository-learning pass. It automatically skips weak evidence or discovery failures without requiring human confirmation.",
+      promptSnippet: "Call once before substantial implementation; continue normally when the result says skip",
+      promptGuidelines: [
+        "Provide the user's complete task plus one concise product-purpose phrase and 1-6 core product capabilities.",
+        "Purpose and capabilities are simple search concepts, not verbatim quotations or nested evidence objects.",
+        "Do not retry merely to force a passing reference. A skip result is final for this task and normal coding should continue immediately.",
+        "Treat the compact brief as bounded evidence. Local requirements and verified tests remain authoritative.",
+      ],
+      parameters: Type.Object({
+        task: Type.String({ minLength: 1, maxLength: 20_000 }),
+        purpose: Type.String({ minLength: 2, maxLength: 100, description: "Plain product/problem phrase, preferably in English for GitHub search" }),
+        capabilities: Type.Array(Type.String({ minLength: 2, maxLength: 100 }), { minItems: 1, maxItems: 6 }),
+        queries: Type.Optional(Type.Array(Type.String({ minLength: 2, maxLength: 500 }), { maxItems: 5 })),
+        language: Type.Optional(Type.String({ maxLength: 100 })),
+        ecosystem: Type.Optional(Type.String({ maxLength: 100 })),
+        mustHave: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 2_000 }), { maxItems: 10 })),
+        avoid: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 2_000 }), { maxItems: 10 })),
+        referenceRepositories: Type.Optional(Type.Array(Type.Object({
+          repository: Type.String({ minLength: 3 }),
+          revision: Type.Optional(Type.String({ minLength: 1, maxLength: 200 })),
+        }), { maxItems: 2 })),
+      }),
+      async execute(_toolCallId, params, _signal, onUpdate, ctx) {
+        onUpdate?.({
+          content: [{ type: "text", text: "Running one bounded precedent-learning pass..." }],
+          details: { phase: "preparing", mode: workflowMode },
+        });
+        const result = await controller.learn(params, ctx.cwd);
+        setStatus(ctx, controller);
+        const scoreLine = result.route === "visual-style"
+          ? `Visual profile: ${result.visual?.spec.profile.label} (${result.visual?.spec.route.score}/${result.visual?.spec.route.threshold}); no remote repository was loaded for visual taste.`
+          : result.repositories.length
+            ? result.repositories.map((item) => `${item.repository}: ${item.score}/${result.threshold}${item.eligible ? " eligible" : ` skipped (${item.blockers.join("; ")})`}`).join("\n")
+            : "No candidate produced a usable benefit score.";
+        return {
+          content: [{
+            type: "text",
+            text: `${result.decision === "learn" ? "Reference learning completed." : "Reference learning skipped; continue normal coding now."}\n\n${scoreLine}\n\n${result.brief}`,
+          }],
+          details: result,
+        };
+      },
+    });
+    pi.registerTool({
+      name: IMITATOR_TOOL_NAMES.visualAudit,
+      label: "Audit local visual implementation",
+      description: "After a visual-style learning result, inspect bounded local CSS/theme/component sources for profile-specific visual anti-patterns. This never requires human confirmation and does not claim pixel-level visual judgment.",
+      promptSnippet: "Call after implementing a visual task; make at most one focused repair and one re-audit",
+      promptGuidelines: [
+        "Call only when imitator_learn selected the visual-style route.",
+        "Treat findings as bounded heuristics, not proof of beauty. Fix concrete errors first and warnings only when they fit the local product.",
+        "Do not call more than twice: one implementation audit and, if needed, one audit after a focused repair.",
+      ],
+      parameters: Type.Object({}),
+      async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+        const report = await controller.auditVisual(ctx.cwd);
+        if (!report) return {
+          content: [{ type: "text", text: "Visual audit is not applicable: the current task did not select the visual-style route. Continue normal coding and testing." }],
+          details: { applicable: false },
+        };
+        const findings = report.findings.map((item) => `[${item.severity}] ${item.signal}: ${item.message}\nAction: ${item.remediation}`).join("\n\n");
+        return {
+          content: [{
+            type: "text",
+            text: `Visual static audit: ${report.status}.\n\n${findings || "No configured static anti-pattern signal fired."}\n\nThis is not a pixel-level aesthetic judgment. Preserve local requirements and inspect the rendered page when possible.`,
+          }],
+          details: report,
+        };
+      },
+    });
+  } else {
   pi.registerTool({
     name: IMITATOR_TOOL_NAMES.prepare,
     label: "Prepare precedent search",
@@ -353,12 +438,17 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
       };
     },
   });
+  }
 
   pi.registerCommand(IMITATOR_COMMAND_NAMES.prepare, {
     description: "Prepare a precedent pack for a coding task",
     handler: async (args, ctx) => {
       const task = args.trim();
       if (!task) { ctx.ui.notify("Usage: /imitator-prepare <coding task>", "warning"); return; }
+      if (workflowMode === "advisory") {
+        ctx.ui.notify("Advisory mode needs no manual prepare or confirmation. Send the task normally; the agent will call imitator_learn once.", "info");
+        return;
+      }
       try {
         ctx.ui.setStatus("imitator", "imitator: preparing");
         const result = await controller.prepare({ task }, ctx.cwd);
@@ -387,6 +477,7 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
         commands: pi.getCommands().map((command) => command.name),
         hooks: registeredHooks,
         store: await controller.stateStoreHealth(ctx.cwd),
+        mode: workflowMode,
       });
       ctx.ui.notify(renderPiHealth(report), report.healthy ? "info" : "error");
     },
@@ -395,6 +486,10 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
   pi.registerCommand(IMITATOR_COMMAND_NAMES.confirm, {
     description: "Human-confirm the current reference-selection or Design Dossier stage",
     handler: async (_args, ctx) => {
+      if (workflowMode === "advisory") {
+        ctx.ui.notify("Advisory mode does not require manual confirmation. Use IMITATOR_MODE=strict before launching Pi to restore the two-stage gate.", "info");
+        return;
+      }
       const phase = controller.status().phase;
       if (phase === "awaiting_design_confirmation") {
         const design = controller.designGateStatus();
@@ -445,7 +540,9 @@ export default function imitatorPiExtension(pi: ExtensionAPI): void {
     handler: async (_args, ctx) => {
       await controller.reset(ctx.cwd);
       setStatus(ctx, controller);
-      ctx.ui.notify("Imitator state reset. Mutation tools are locked until a new reference selection and Design Dossier pass independent confirmation.", "info");
+      ctx.ui.notify(workflowMode === "advisory"
+        ? "Imitator advisory state reset. The next coding task will receive one new learning pass."
+        : "Imitator state reset. Mutation tools are locked until a new reference selection and Design Dossier pass independent confirmation.", "info");
     },
   });
 }

@@ -3,7 +3,7 @@
   "version": "0.8.0",
   "private": true,
   "type": "module",
-  "description": "Evidence-bound design-taste distillation and dual confirmation for coding agents.",
+  "description": "Bounded precedent learning for coding agents, with default advisory and optional strict audit modes.",
   "keywords": [
     "pi-package",
     "coding-agent",

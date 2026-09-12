@@ -14,11 +14,12 @@ import type {
   ReviewSubmission,
   TaskIdentity,
 } from "../../src/types.ts";
+import type { AdvisoryLearningResult, PiWorkflowMode } from "../../src/advisory.ts";
 import { createTaskIdentity } from "../../src/task.ts";
 
 const execFileAsync = promisify(execFile);
 
-export type PersistedPiPhase = "reviewing" | "awaiting_confirmation" | "distilling" | "awaiting_design_confirmation" | "approved" | "blocked";
+export type PersistedPiPhase = "advisory_ready" | "bypassed" | "reviewing" | "awaiting_confirmation" | "distilling" | "awaiting_design_confirmation" | "approved" | "blocked";
 
 export type PersistedPiPayload = {
   schemaVersion: 3;
@@ -40,6 +41,8 @@ export type PersistedPiPayload = {
   provisionalDesignGate?: DesignGateResult;
   designConfirmation?: DesignConfirmation;
   finalDesignGate?: DesignGateResult;
+  workflowMode?: PiWorkflowMode;
+  advisory?: AdvisoryLearningResult;
   savedAt: string;
 };
 
